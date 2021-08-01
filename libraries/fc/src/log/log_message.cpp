@@ -19,6 +19,7 @@ namespace fc
             string       file;
             uint64_t     line;
             string       method;
+            string       thread_name;
             string       task_name;
             string       hostname;
             string       context;
@@ -52,6 +53,7 @@ namespace fc
       my->line        = line;
       my->method      = method;
       my->timestamp   = time_point::now();
+      my->thread_name = fc::thread::current().name();
       const char* current_task_desc = fc::thread::current().current_task_desc();
       my->task_name   = current_task_desc ? current_task_desc : "?unnamed?";
    }
@@ -65,6 +67,7 @@ namespace fc
        my->line         = obj["line"].as_uint64();
        my->method       = obj["method"].as_string();
        my->hostname     = obj["hostname"].as_string();
+       my->thread_name  = obj["thread_name"].as_string();
        if (obj.contains("task_name"))
          my->task_name    = obj["task_name"].as_string();
        my->timestamp    = obj["timestamp"].as<time_point>();
@@ -152,6 +155,7 @@ namespace fc
    string     log_context::get_file()const       { return my->file; }
    uint64_t   log_context::get_line_number()const { return my->line; }
    string     log_context::get_method()const     { return my->method; }
+   string     log_context::get_thread_name()const { return my->thread_name; }
    string     log_context::get_task_name()const { return my->task_name; }
    string     log_context::get_host_name()const   { return my->hostname; }
    time_point  log_context::get_timestamp()const  { return my->timestamp; }
@@ -167,6 +171,7 @@ namespace fc
                ( "line",         my->line                )
                ( "method",       my->method              )
                ( "hostname",     my->hostname            )
+               ( "thread_name",  my->thread_name         )
                ( "timestamp",    variant(my->timestamp)  );
 
       if( my->context.size() )

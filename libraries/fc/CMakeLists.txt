@@ -201,6 +201,7 @@ set( fc_sources
      src/log/console_appender.cpp
      src/log/file_appender.cpp
      src/log/gelf_appender.cpp
+     src/log/json_file_appender.cpp
      src/log/logger_config.cpp
      src/crypto/_digest_common.cpp
      src/crypto/openssl.cpp

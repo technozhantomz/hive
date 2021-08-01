@@ -8,6 +8,7 @@
 #include <fc/log/console_appender.hpp>
 #include <fc/log/file_appender.hpp>
 #include <fc/log/gelf_appender.hpp>
+#include <fc/log/json_file_appender.hpp>
 #include <fc/variant.hpp>
 #include <fc/macros.hpp>
 #include "console_defines.h"
@@ -90,5 +91,10 @@ namespace fc {
    {
       return appender::register_appender<gelf_appender>( "gelf" );
    }( &reg_gelf_appender );
+
+   static bool reg_json_file_appender = []( __attribute__((unused)) bool* )->bool
+   {
+      return appender::register_appender<json_file_appender>( "json_file" );
+   }( &reg_json_file_appender );
 
 } // namespace fc
