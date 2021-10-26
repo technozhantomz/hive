@@ -5,6 +5,11 @@ from test_tools import Wallet
 
 BLOCK_COUNT = 30
 
+def pytest_addoption(parser):
+    parser.addoption( "--ref", action="store", type=str, help='specifies address of reference node', default=None)
+    parser.addoption( "--test", action="store", type=str, help='specifies address of tested service', default=None)
+    parser.addoption( "--hashes", action="store", type=str, help='specifies path to file with hashes to check (one per line)', default=None)
+
 @fixture(scope='package')
 def block_log() -> Path:
   from time import sleep
