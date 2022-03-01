@@ -543,32 +543,16 @@ HIVE_AUTO_TEST_CASE( operator_equal,
     variant v = variant{ lhs } == variant{ rhs };
     BOOST_REQUIRE( v.is_bool() );
     BOOST_REQUIRE( !( !negate ^ v.as_bool() ) );
+    v = variant{ lhs } != variant{ rhs };
+    negate = true;
+    BOOST_REQUIRE( v.is_bool() );
+    BOOST_REQUIRE( !( !negate ^ v.as_bool() ) );
   };
 
   handle_bool_comparison( "alice", "alice" );
   handle_bool_comparison( int64_t( -1 ), int64_t( -1 ) );
   handle_bool_comparison( uint64_t( -1 ), uint64_t( -1 ) );
   handle_bool_comparison( double( 3.14 ), double( 3.14 ) );
-
-  handle_bool_comparison( nullptr_t{}, nullptr_t{}, true );
-  handle_bool_comparison( true, true, true );
-  handle_bool_comparison( fc::variant_object{}, fc::variant_object{}, true );
-  handle_bool_comparison( fc::variants{}, fc::variants{}, true );
-)
-
-HIVE_AUTO_TEST_CASE( operator_not_equal,
-  using fc::variant;
-
-  const auto handle_bool_comparison = [&]( auto&& lhs, auto&& rhs, bool negate = false ) {
-    variant v = variant{ lhs } != variant{ rhs };
-    BOOST_REQUIRE( v.is_bool() );
-    BOOST_REQUIRE( !( !negate ^ v.as_bool() ) );
-  };
-
-  handle_bool_comparison( "alice", "bob" );
-  handle_bool_comparison( int64_t( -1 ), int64_t( 10 ) );
-  handle_bool_comparison( uint64_t( -1 ), uint64_t( 10 ) );
-  handle_bool_comparison( double( 3.14 ), double( 3.141592 ) );
 
   handle_bool_comparison( nullptr_t{}, nullptr_t{}, true );
   handle_bool_comparison( true, true, true );
@@ -591,6 +575,25 @@ HIVE_AUTO_TEST_CASE( operator_negate,
   handle_bool_comparison( double( 3.14 ) );
 
   handle_bool_comparison( nullptr_t{}, true );
+)
+
+HIVE_AUTO_TEST_CASE( operator_lt_gt,
+  using fc::variant;
+
+  const auto handle_bool_comparison = [&]( auto&& lhs, auto&& rhs, bool negate = false ) {
+    variant v = variant{ lhs } < variant{ rhs };
+    BOOST_REQUIRE( v.is_bool() );
+    BOOST_REQUIRE( !( !negate ^ v.as_bool() ) );
+    v = variant{ lhs } > variant{ rhs };
+    negate = !negate;
+    BOOST_REQUIRE( v.is_bool() );
+    BOOST_REQUIRE( !( !negate ^ v.as_bool() ) );
+  };
+
+  handle_bool_comparison( "alice", "bob" );
+  handle_bool_comparison( int64_t( -1 ), int64_t( 10 ) );
+  handle_bool_comparison( uint64_t( 9 ), uint64_t( 10 ) );
+  handle_bool_comparison( double( 3.14 ), double( 3.141592 ) );
 )
 
 // TODO: operators, extended nested object tests (from_variant, to_variant, as etc.)
