@@ -576,6 +576,23 @@ HIVE_AUTO_TEST_CASE( operator_not_equal,
   handle_bool_comparison( fc::variants{}, fc::variants{}, true );
 )
 
+HIVE_AUTO_TEST_CASE( operator_negate,
+  using fc::variant;
+
+  const auto handle_bool_comparison = [&]( auto&& value, bool negate = false ) {
+    variant v = !variant{ value };
+    BOOST_REQUIRE( !negate ^ v.as_bool() );
+  };
+
+  handle_bool_comparison( true );
+  handle_bool_comparison( "true" );
+  handle_bool_comparison( int64_t( 10 ) );
+  handle_bool_comparison( uint64_t( 10 ) );
+  handle_bool_comparison( double( 3.14 ) );
+
+  handle_bool_comparison( nullptr_t{}, true );
+)
+
 // TODO: operators, extended nested object tests (from_variant, to_variant, as etc.)
 
 BOOST_AUTO_TEST_SUITE_END()
