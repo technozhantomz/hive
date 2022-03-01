@@ -797,8 +797,8 @@ string      format_string( const string& format, const variant_object& args )
          const variants& aa = a.get_array();
          const variants& ba = b.get_array();
          variants result;
-         result.reserve( std::max(aa.size(),ba.size()) );
-         auto num = std::max(aa.size(),ba.size());
+         auto num = std::max( aa.size(),ba.size() );
+         result.resize( num );
          for( unsigned i = 0; i < num; ++i )
          {
             if( aa.size() > i && ba.size() > i )
@@ -824,9 +824,9 @@ string      format_string( const string& format, const variant_object& args )
          const variants& aa = a.get_array();
          const variants& ba = b.get_array();
          variants result;
-         result.reserve( std::max(aa.size(),ba.size()) );
          auto num = std::max(aa.size(),ba.size());
-         for( unsigned i = 0; i < num; --i )
+         result.resize( num );
+         for( unsigned i = 0; i < num; ++i )
          {
             if( aa.size() > i && ba.size() > i )
                result[i]  = aa[i] - ba[i];
@@ -853,8 +853,8 @@ string      format_string( const string& format, const variant_object& args )
          const variants& aa = a.get_array();
          const variants& ba = b.get_array();
          variants result;
-         result.reserve( std::max(aa.size(),ba.size()) );
          auto num = std::max(aa.size(),ba.size());
+         result.resize( num );
          for( unsigned i = 0; i < num; ++i )
          {
             if( aa.size() > i && ba.size() > i )
@@ -878,8 +878,8 @@ string      format_string( const string& format, const variant_object& args )
          const variants& aa = a.get_array();
          const variants& ba = b.get_array();
          variants result;
-         result.reserve( std::max(aa.size(),ba.size()) );
          auto num = std::max(aa.size(),ba.size());
+         result.resize( num );
          for( unsigned i = 0; i < num; ++i )
          {
             if( aa.size() > i && ba.size() > i )
