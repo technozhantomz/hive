@@ -451,6 +451,7 @@ HIVE_AUTO_TEST_CASE( extended_variant_construction,
   test_type( uint32_t{}, variant::uint64_type );
 )
 
+// Variant:
 namespace
 {
 
@@ -531,6 +532,48 @@ HIVE_AUTO_TEST_CASE( visitor,
   test_visitor( double{}, variant::double_type );
   test_visitor( fc::variant_object{}, variant::object_type );
   test_visitor( fc::variants{}, variant::array_type );
+)
+
+// Operators:
+
+HIVE_AUTO_TEST_CASE( operator_equal,
+  using fc::variant;
+
+  const auto handle_bool_comparison = [&]( auto&& lhs, auto&& rhs, bool negate = false ) {
+    variant v = variant{ lhs } == variant{ rhs };
+    BOOST_REQUIRE( v.is_bool() );
+    BOOST_REQUIRE( !( !negate ^ v.as_bool() ) );
+  };
+
+  handle_bool_comparison( "alice", "alice" );
+  handle_bool_comparison( int64_t( -1 ), int64_t( -1 ) );
+  handle_bool_comparison( uint64_t( -1 ), uint64_t( -1 ) );
+  handle_bool_comparison( double( 3.14 ), double( 3.14 ) );
+
+  handle_bool_comparison( nullptr_t{}, nullptr_t{}, true );
+  handle_bool_comparison( true, true, true );
+  handle_bool_comparison( fc::variant_object{}, fc::variant_object{}, true );
+  handle_bool_comparison( fc::variants{}, fc::variants{}, true );
+)
+
+HIVE_AUTO_TEST_CASE( operator_not_equal,
+  using fc::variant;
+
+  const auto handle_bool_comparison = [&]( auto&& lhs, auto&& rhs, bool negate = false ) {
+    variant v = variant{ lhs } != variant{ rhs };
+    BOOST_REQUIRE( v.is_bool() );
+    BOOST_REQUIRE( !( !negate ^ v.as_bool() ) );
+  };
+
+  handle_bool_comparison( "alice", "bob" );
+  handle_bool_comparison( int64_t( -1 ), int64_t( 10 ) );
+  handle_bool_comparison( uint64_t( -1 ), uint64_t( 10 ) );
+  handle_bool_comparison( double( 3.14 ), double( 3.141592 ) );
+
+  handle_bool_comparison( nullptr_t{}, nullptr_t{}, true );
+  handle_bool_comparison( true, true, true );
+  handle_bool_comparison( fc::variant_object{}, fc::variant_object{}, true );
+  handle_bool_comparison( fc::variants{}, fc::variants{}, true );
 )
 
 // TODO: operators, extended nested object tests (from_variant, to_variant, as etc.)
