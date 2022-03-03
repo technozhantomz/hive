@@ -642,16 +642,6 @@ namespace fc
       for( const auto& item : vars )
          c.insert( item.as<T>() );
    }
-
-   variant operator + ( const variant& a, const variant& b );
-   variant operator - ( const variant& a, const variant& b );
-   variant operator * ( const variant& a, const variant& b );
-   variant operator / ( const variant& a, const variant& b );
-   variant operator == ( const variant& a, const variant& b );
-   variant operator != ( const variant& a, const variant& b );
-   variant operator < ( const variant& a, const variant& b );
-   variant operator > ( const variant& a, const variant& b );
-   variant operator ! ( const variant& a );
 } // namespace fc
 
 #include <fc/reflect/reflect.hpp>
