@@ -471,10 +471,18 @@ void count_resources(
     op.visit( vtor );
   }
 
+  auto prevent_negative = []( count_resources_result& result )
+  {
+    for( auto& usage : result )
+      if( usage < 0 )
+        usage = 0;
+  };
+
   if( vtor.subsidized_op && tx.operations.size() == 1 && tx.signatures.size() <= vtor.subsidized_signatures )
   {
     // transactions with single subsidized operation with normal amount of signatures are free
     // (for now just account recovery operation, but we might have more in the future)
+    prevent_negative( result );
     return;
   }
   
@@ -490,6 +498,8 @@ void count_resources(
 
   result[ resource_execution_time ] += vtor.execution_time_count
     + exec_info.transaction_time + exec_info.verify_authority_time * tx.signatures.size();
+
+  prevent_negative( result );
 }
 
 void count_resources(
@@ -515,6 +525,10 @@ void count_resources(
   result[ resource_state_bytes ] += vtor.state_bytes_count;
 
   result[ resource_execution_time ] += vtor.execution_time_count;
+
+  for( auto& usage : result )
+    if( usage < 0 )
+      usage = 0;
 }
 
 } } } // hive::plugins::rc
