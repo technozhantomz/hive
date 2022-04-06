@@ -2013,6 +2013,9 @@ void custom_json_evaluator::do_apply( const custom_json_operation& o )
   {
     if( _db.is_producing() )
       throw e;
+    //note: it is up to evaluator to unconditionally (regardless of is_producing, working even during
+    //replay) undo changes made during custom operation in case of exception;
+    //generic_custom_operation_interpreter::apply_operations provides such protection (see issue #256)
   }
   catch(...)
   {
