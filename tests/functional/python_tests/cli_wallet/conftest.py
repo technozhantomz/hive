@@ -102,3 +102,13 @@ def creator_proposal_id(wallet: Wallet, funded_account: funded_account_info) -> 
 @pytest.fixture
 def account_proposal_id(wallet: Wallet, funded_account: funded_account_info) -> prepared_proposal_data_with_id:
     return create_proposal(wallet=wallet, funded_account=funded_account, creator_is_propsal_creator=False)
+
+
+@pytest.fixture
+def wallet_with_legacy_serialization(node):
+    return Wallet(attach_to=node, additional_arguments=['--transaction-serialization=legacy'])
+
+
+@pytest.fixture
+def wallet_with_hf26_serialization(node):
+    return Wallet(attach_to=node, additional_arguments=['--transaction-serialization=hf26'])
