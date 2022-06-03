@@ -10,6 +10,24 @@
   before_script:
     - apk update && apk add bash git ca-certificates curl
 
+.docker_image_cleanup_job:
+  extends: .docker_image_builder_job
+
+  variables:
+    REGISTRY: $CI_REGISTRY_IMAGE
+    REGISTRY_USER: ""
+    REGISTRY_PASS: ""
+    IMAGE_TAG: ""
+
+  before_script:
+    - !reference [.docker_image_builder_job, before_script]
+    - curl --fail --show-error --location "https://github.com/genuinetools/reg/releases/download/v$REG_VERSION/reg-linux-amd64" --output /usr/local/bin/reg
+    - echo "$REG_SHA256  /usr/local/bin/reg" | sha256sum -c -
+    - chmod a+x /usr/local/bin/reg
+
+  script:
+    - /usr/local/bin/reg rm -d --auth-url $REGISTRY -u $REGISTRY_USER -p $REGISTRY_PASS $IMAGE_TAG
+
 .prepare_hived_data_5m_image:
   extends: .docker_image_builder_job
 
