@@ -30,9 +30,8 @@ prepare_hived_data_image:
 cleanup_hived_data_image:
   extends: .docker_image_cleanup_job
   stage: cleanup
-  needs:
-    - job: prepare_hived_data_image
-      artifacts: true
+  dependencies:
+    - prepare_hived_data_image
 
   variables:
     REGISTRY: $CI_REGISTRY_IMAGE
@@ -244,6 +243,7 @@ fork_tests:
   script:
     - cd tests/functional/python_tests/fork_tests
     - pytest --junitxml="./report.xml"
+  timeout: 15min
   artifacts:
     reports:
       junit: tests/functional/python_tests/fork_tests/report.xml
