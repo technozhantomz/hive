@@ -11,25 +11,24 @@
     - apk update && apk add bash git ca-certificates curl
 
 .docker_image_cleanup_job:
-  extends: .docker_image_builder_job
+  image: gitlab-registry.cern.ch/ci-tools/docker-image-tools:delete-image
 
   variables:
+    # Interface variables (to be overrided by derived jobs)
     REGISTRY: $CI_REGISTRY_IMAGE
     REGISTRY_USER: ""
     REGISTRY_PASS: ""
+    IMAGE_PATH: ""
     IMAGE_TAG: ""
 
-    REG_SHA256: ade837fc5224acd8c34732bf54a94f579b47851cc6a7fd5899a98386b782e228
-    REG_VERSION: 0.16.1
-
-  before_script:
-    - !reference [.docker_image_builder_job, before_script]
-    - curl --fail --show-error --location "https://github.com/genuinetools/reg/releases/download/v$REG_VERSION/reg-linux-amd64" --output /usr/local/bin/reg
-    - echo "$REG_SHA256  /usr/local/bin/reg" | sha256sum -c -
-    - chmod a+x /usr/local/bin/reg
-
+    # Internal variables
+    GIT_STRATEGY: none
+    DOCKER_LOGIN_USERNAME: $REGISTRY_USER
+    DOCKER_LOGIN_PASSWORD: $REGISTRY_PASS
+    DOCKER_IMAGE_PATH: $IMAGE_PATH
+    TAG: $IMAGE_TAG
   script:
-    - /usr/local/bin/reg rm -d --auth-url $REGISTRY -u $REGISTRY_USER -p $REGISTRY_PASS $IMAGE_TAG
+    - echo "Attempting to cleanup an image $IMAGE_PATH using tag $IMAGE_TAG from $REGISTRY"
 
 .prepare_hived_data_5m_image:
   extends: .docker_image_builder_job
