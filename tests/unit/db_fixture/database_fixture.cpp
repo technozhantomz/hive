@@ -1,18 +1,15 @@
 #include <boost/test/unit_test.hpp>
 #include <boost/program_options.hpp>
 
-#include <hive/utilities/tempdir.hpp>
+#include <hive/protocol/exceptions.hpp>
+
 #include <hive/utilities/database_configuration.hpp>
 
-#include <hive/chain/history_object.hpp>
 #include <hive/chain/hive_objects.hpp>
 #include <hive/chain/sps_objects.hpp>
 #include <hive/chain/util/delayed_voting.hpp>
 
-#include <hive/plugins/account_history/account_history_plugin.hpp>
-#include <hive/plugins/account_history_rocksdb/account_history_rocksdb_plugin.hpp>
 #include <hive/plugins/chain/chain_plugin.hpp>
-#include <hive/plugins/rc/rc_plugin.hpp>
 #include <hive/plugins/webserver/webserver_plugin.hpp>
 #include <hive/plugins/witness/witness_plugin.hpp>
 
@@ -40,52 +37,93 @@ using hive::plugins::condenser_api::condenser_api_plugin;
 
 namespace hive { namespace chain {
 
-typedef hive::plugins::account_history::account_history_plugin ah_plugin;
-//typedef hive::plugins::account_history_rocksdb::account_history_rocksdb_plugin ah_plugin;
-
 using std::cout;
 using std::cerr;
 
-clean_database_fixture::clean_database_fixture( uint16_t shared_file_size_in_mb, fc::optional<uint32_t> hardfork )
+autoscope set_mainnet_cashout_values( bool auto_reset )
 {
-  try {
+  configuration_data.set_cashout_related_values(
+    0, 60 * 60 * 24, 60 * 60 * 24 * 2, 60 * 60 * 24 * 7, 60 * 60 * 12 );
+  if( auto_reset )
+    return autoscope([](){ configuration_data.reset(); });
+  else
+    return autoscope([](){});
+}
+
+fc::path common_init( const std::function< void( appbase::application& app, int argc, char** argv ) >& app_initializer )
+{
   int argc = boost::unit_test::framework::master_test_suite().argc;
   char** argv = boost::unit_test::framework::master_test_suite().argv;
-  for( int i=1; i<argc; i++ )
+  std::vector<const char*> argv_ext( argv, argv + argc );
+  argv_ext.emplace_back( nullptr );
+
+  bool has_data_dir = false;
+  fc::path _data_dir;
+  std::string temp_data_dir;
+  for( int i = 1; i < argc; i++ )
   {
-    const std::string arg = argv[i];
+    const std::string arg = argv_ext[ i ];
     if( arg == "--record-assert-trip" )
       fc::enable_record_assert_trip = true;
     if( arg == "--show-test-names" )
       std::cout << "running test " << boost::unit_test::framework::current_test_case().p_name << std::endl;
+    if( ( arg == "--data-dir" || arg == "-d" ) && ( i + 1 ) < argc )
+    {
+      _data_dir = argv_ext[ i + 1 ];
+      has_data_dir = true;
+    }
+  }
+  if( has_data_dir == false )
+  {
+    _data_dir = hive::utilities::temp_directory_path();
+    temp_data_dir = _data_dir.string();
+    argv_ext.back() = "--data-dir";
+    argv_ext.emplace_back( temp_data_dir.c_str() );
+    argv_ext.emplace_back( nullptr );
+    argc += 2;
   }
 
-  appbase::app().register_plugin< ah_plugin >();
-  db_plugin = &appbase::app().register_plugin< hive::plugins::debug_node::debug_node_plugin >();
-  appbase::app().register_plugin< hive::plugins::rc::rc_plugin >();
-  appbase::app().register_plugin< hive::plugins::witness::witness_plugin >();
+  app_initializer( appbase::app(), argc, (char**)argv_ext.data() );
+  return _data_dir;
+}
 
-  db_plugin->logging = false;
-  appbase::app().initialize<
-    ah_plugin,
-    hive::plugins::debug_node::debug_node_plugin,
-    hive::plugins::rc::rc_plugin,
-    hive::plugins::witness::witness_plugin
+clean_database_fixture::clean_database_fixture( uint16_t shared_file_size_in_mb, fc::optional<uint32_t> hardfork )
+{
+  try {
+
+  auto _data_dir = common_init( [&]( appbase::application& app, int argc, char** argv )
+  {
+    ah_plugin = &app.register_plugin< ah_plugin_type >();
+    ah_plugin->set_destroy_database_on_startup();
+    ah_plugin->set_destroy_database_on_shutdown();
+    db_plugin = &app.register_plugin< hive::plugins::debug_node::debug_node_plugin >();
+    rc_plugin = &app.register_plugin< hive::plugins::rc::rc_plugin >();
+    app.register_plugin< hive::plugins::witness::witness_plugin >();
+
+    db_plugin->logging = false;
+    app.initialize<
+      ah_plugin_type,
+      hive::plugins::debug_node::debug_node_plugin,
+      hive::plugins::rc::rc_plugin,
+      hive::plugins::witness::witness_plugin
     >( argc, argv );
 
+    db = &app.get_plugin< hive::plugins::chain::chain_plugin >().db();
+    BOOST_REQUIRE( db );
+  } );
+  
   hive::plugins::rc::rc_plugin_skip_flags rc_skip;
   rc_skip.skip_reject_not_enough_rc = 1;
   rc_skip.skip_deduct_rc = 0;
   rc_skip.skip_negative_rc_balance = 1;
   rc_skip.skip_reject_unknown_delta_vests = 0;
-  appbase::app().get_plugin< hive::plugins::rc::rc_plugin >().set_rc_plugin_skip_flags( rc_skip );
-
-  db = &appbase::app().get_plugin< hive::plugins::chain::chain_plugin >().db();
-  BOOST_REQUIRE( db );
+  rc_plugin->set_rc_plugin_skip_flags( rc_skip );
 
   init_account_pub_key = init_account_priv_key.get_public_key();
 
-  open_database( shared_file_size_in_mb );
+  ah_plugin->plugin_startup(); //ABW: we can't just use appbase::app().startup() because it conflicts with code below
+
+  open_database( _data_dir, shared_file_size_in_mb );
 
   inject_hardfork( hardfork.valid() ? ( *hardfork ) : HIVE_BLOCKCHAIN_VERSION.minor_v() );
 
@@ -118,6 +156,8 @@ clean_database_fixture::~clean_database_fixture()
     BOOST_CHECK( db->get_node_properties().skip_flags == database::skip_nothing );
   }
 
+  if( ah_plugin )
+    ah_plugin->plugin_shutdown();
   if( data_dir )
     db->wipe( data_dir->path(), data_dir->path(), true );
   return;
@@ -128,7 +168,7 @@ clean_database_fixture::~clean_database_fixture()
 void clean_database_fixture::validate_database()
 {
   database_fixture::validate_database();
-  appbase::app().get_plugin< hive::plugins::rc::rc_plugin >().validate_database();
+  rc_plugin->validate_database();
 }
 
 void clean_database_fixture::resize_shared_mem( uint64_t size, fc::optional<uint32_t> hardfork )
@@ -190,25 +230,32 @@ hardfork_database_fixture::~hardfork_database_fixture()
 {
 }
 
+genesis_database_fixture::genesis_database_fixture( uint16_t shared_file_size_in_mb )
+  : clean_database_fixture( shared_file_size_in_mb, 0 )
+{}
+
+genesis_database_fixture::~genesis_database_fixture()
+{}
+
+curation_database_fixture::curation_database_fixture( uint16_t shared_file_size_in_mb )
+  : clean_database_fixture( ( set_mainnet_cashout_values( false ), shared_file_size_in_mb ) )
+{
+}
+
+curation_database_fixture::~curation_database_fixture()
+{
+  configuration_data.reset();
+}
+
 cluster_database_fixture::cluster_database_fixture( uint16_t _shared_file_size_in_mb )
                             : shared_file_size_in_mb( _shared_file_size_in_mb )
 {
+  set_mainnet_cashout_values( false );
 }
 
 cluster_database_fixture::~cluster_database_fixture()
 {
-}
-
-void cluster_database_fixture::execute_24( content_method content )
-{
-  ptr_hardfork_database_fixture executor( new hardfork_database_fixture( shared_file_size_in_mb, 24/*hardfork*/ ) );
-  content( executor );
-}
-
-void cluster_database_fixture::execute_25( content_method content )
-{
-  ptr_hardfork_database_fixture executor( new hardfork_database_fixture( shared_file_size_in_mb, 25/*hardfork*/ ) );
-  content( executor );
+  configuration_data.reset();
 }
 
 live_database_fixture::live_database_fixture()
@@ -222,8 +269,8 @@ live_database_fixture::live_database_fixture()
     _chain_dir = fc::current_path() / "test_blockchain";
     FC_ASSERT( fc::exists( _chain_dir ), "Requires blockchain to test on in ./test_blockchain" );
 
-    appbase::app().register_plugin< ah_plugin >();
-    appbase::app().initialize< ah_plugin >( argc, argv );
+    appbase::app().register_plugin< ah_plugin_type >();
+    appbase::app().initialize< ah_plugin_type >( argc, argv );
 
     db = &appbase::app().get_plugin< hive::plugins::chain::chain_plugin >().db();
     BOOST_REQUIRE( db );
@@ -284,11 +331,11 @@ asset_symbol_type database_fixture::get_new_smt_symbol( uint8_t token_decimal_pl
 }
 #endif
 
-void database_fixture::open_database( uint16_t shared_file_size_in_mb )
+void database_fixture::open_database( const fc::path& _data_dir, uint16_t shared_file_size_in_mb )
 {
   if( !data_dir )
   {
-    data_dir = fc::temp_directory( hive::utilities::temp_directory_path() );
+    data_dir = fc::temp_directory( _data_dir );
     db->_log_hardforks = false;
 
     idump( (data_dir->path()) );
@@ -374,7 +421,7 @@ const account_object& database_fixture::account_create(
     trx.set_expiration( db->head_block_time() + HIVE_MAX_TIME_UNTIL_EXPIRATION );
     sign( trx, creator_key );
     trx.validate();
-    db->push_transaction( trx, 0 );
+    push_transaction( trx, 0 );
     trx.clear();
 
     if( fee_remainder > 0 )
@@ -409,6 +456,26 @@ const account_object& database_fixture::account_create(
   FC_CAPTURE_AND_RETHROW( (name) );
 }
 
+const account_object& database_fixture::account_create_default_fee(
+  const string& name,
+  const public_key_type& key,
+  const public_key_type& post_key
+)
+{
+  try
+  {
+    return account_create(
+      name,
+      HIVE_INIT_MINER_NAME,
+      init_account_priv_key,
+      db->get_witness_schedule_object().median_props.account_creation_fee.amount,
+      key,
+      post_key,
+      "" );
+  }
+  FC_CAPTURE_AND_RETHROW( (name) );
+}
+
 const account_object& database_fixture::account_create(
   const string& name,
   const public_key_type& key
@@ -436,7 +503,7 @@ const witness_object& database_fixture::witness_create(
     trx.set_expiration( db->head_block_time() + HIVE_MAX_TIME_UNTIL_EXPIRATION );
     sign( trx, owner_key );
     trx.validate();
-    db->push_transaction( trx, 0 );
+    push_transaction( trx, 0 );
     trx.clear();
 
     return db->get_witness( owner );
@@ -560,7 +627,7 @@ void database_fixture::transfer(
       sign( trx, init_account_priv_key );
     }
 
-    db->push_transaction( trx, ~0 );
+    push_transaction( trx, ~0 );
     trx.clear();
   } FC_CAPTURE_AND_RETHROW( (from)(to)(amount) )
 }
@@ -571,7 +638,31 @@ void database_fixture::push_transaction( const operation& op, const fc::ecc::pri
   tx.set_expiration( db->head_block_time() + HIVE_MAX_TIME_UNTIL_EXPIRATION );
   tx.operations.push_back( op );
   sign( tx, key );
-  db->push_transaction( tx, 0 );
+  push_transaction( tx, 0 );
+}
+
+void database_fixture::push_transaction( const signed_transaction& trx, uint32_t skip )
+{
+  try
+  {
+    db->push_transaction( signed_transaction_transporter( trx, serialization_mode_controller::get_current_pack() ), skip );
+  }
+  catch( const hive::protocol::transaction_auth_exception& e )
+  {
+    try
+    {
+      if( db->has_hardfork( HIVE_HARDFORK_1_26 ) )
+      {
+        db->push_transaction( signed_transaction_transporter( trx, serialization_mode_controller::get_another_pack() ), skip );
+      }
+      else
+        throw;
+    }
+    catch( ... )
+    {
+      throw;
+    }
+  }
 }
 
 void database_fixture::vest( const string& from, const string& to, const asset& amount )
@@ -596,7 +687,7 @@ void database_fixture::vest( const string& from, const string& to, const asset& 
       sign( trx, init_account_priv_key );
     }
 
-    db->push_transaction( trx, ~0 );
+    push_transaction( trx, ~0 );
     trx.clear();
   } FC_CAPTURE_AND_RETHROW( (from)(to)(amount) )
 }
@@ -619,7 +710,7 @@ void database_fixture::vest( const string& from, const share_type& amount )
       sign( trx, init_account_priv_key );
     }
 
-    db->push_transaction( trx, ~0 );
+    push_transaction( trx, ~0 );
     trx.clear();
   } FC_CAPTURE_AND_RETHROW( (from)(amount) )
 }
@@ -645,7 +736,7 @@ void database_fixture::proxy( const string& account, const string& proxy )
     op.proxy = proxy;
     trx.operations.push_back( op );
     trx.set_expiration(db->head_block_time() + HIVE_MAX_TIME_UNTIL_EXPIRATION);
-    db->push_transaction( trx, ~0 );
+    push_transaction( trx, ~0 );
     trx.clear();
   } FC_CAPTURE_AND_RETHROW( (account)(proxy) )
 }
@@ -661,7 +752,7 @@ void database_fixture::set_price_feed( const price& new_price, bool stop_at_upda
 
     trx.operations.push_back( op );
     trx.set_expiration( db->head_block_time() + HIVE_MAX_TIME_UNTIL_EXPIRATION );
-    db->push_transaction( trx, ~0 );
+    push_transaction( trx, ~0 );
     trx.clear();
   }
 
@@ -691,7 +782,7 @@ void database_fixture::set_witness_props( const flat_map< string, vector< char >
 
     trx.operations.push_back( op );
     trx.set_expiration( db->head_block_time() + HIVE_MAX_TIME_UNTIL_EXPIRATION );
-    db->push_transaction( trx, ~0 );
+    push_transaction( trx, ~0 );
     trx.clear();
   }
 
@@ -772,7 +863,7 @@ void database_fixture::post_comment_internal( const std::string& _author, const 
   trx.operations.push_back( comment );
   trx.set_expiration( db->head_block_time() + HIVE_MAX_TIME_UNTIL_EXPIRATION );
   sign( trx, _key );
-  db->push_transaction( trx, 0 );
+  push_transaction( trx, 0 );
   trx.signatures.clear();
   trx.operations.clear();
 }
@@ -802,7 +893,7 @@ void database_fixture::vote( std::string _author, std::string _permlink, std::st
   trx.operations.push_back( vote );
   trx.set_expiration( db->head_block_time() + HIVE_MAX_TIME_UNTIL_EXPIRATION );
   sign( trx, _key );
-  db->push_transaction( trx, 0 );
+  push_transaction( trx, 0 );
   trx.signatures.clear();
   trx.operations.clear();
 }
@@ -815,19 +906,15 @@ void database_fixture::sign(signed_transaction& trx, const fc::ecc::private_key&
 vector< operation > database_fixture::get_last_operations( uint32_t num_ops )
 {
   vector< operation > ops;
-  const auto& acc_hist_idx = db->get_index< account_history_index >().indices().get< by_id >();
-  auto itr = acc_hist_idx.end();
-
-  while( itr != acc_hist_idx.begin() && ops.size() < num_ops )
+  const auto& idx = db->get_index< hive::plugins::account_history_rocksdb::volatile_operation_index, by_id >();
+  auto it = idx.end();
+  while( it != idx.begin() && num_ops > 0 )
   {
-    itr--;
-    const buffer_type& _serialized_op = db->get(itr->op).serialized_op;
-    std::vector<char> serialized_op;
-    serialized_op.reserve( _serialized_op.size() );
-    std::copy( _serialized_op.begin(), _serialized_op.end(), std::back_inserter( serialized_op ) );
-    ops.push_back( fc::raw::unpack_from_vector< hive::chain::operation >( serialized_op ) );
+    --it;
+    --num_ops;
+    operation op = fc::raw::unpack_from_buffer< operation >( it->serialized_op );
+    ops.emplace_back( std::move( op ) );
   }
-
   return ops;
 }
 
@@ -868,7 +955,7 @@ asset_symbol_type t_smt_database_fixture< T >::create_smt_with_nai( const string
     tx.set_expiration( this->db->head_block_time() + HIVE_MAX_TIME_UNTIL_EXPIRATION );
     tx.sign( key, this->db->get_chain_id(), fc::ecc::bip_0062 );
 
-    this->db->push_transaction( tx, 0 );
+    this->push_transaction( tx, 0 );
 
     this->generate_block();
   }
@@ -936,7 +1023,7 @@ std::array<asset_symbol_type, 3> t_smt_database_fixture< T >::create_smt_3(const
     tx.operations.push_back( op2 );
     tx.set_expiration( this->db->head_block_time() + HIVE_MAX_TIME_UNTIL_EXPIRATION );
     tx.sign( key, this->db->get_chain_id(), fc::ecc::bip_0062 );
-    this->db->push_transaction( tx, 0 );
+    this->push_transaction( tx, 0 );
 
     this->generate_block();
 
@@ -960,7 +1047,7 @@ void push_invalid_operation(const operation& invalid_op, const fc::ecc::private_
   tx.operations.push_back( invalid_op );
   tx.set_expiration( db->head_block_time() + HIVE_MAX_TIME_UNTIL_EXPIRATION );
   tx.sign( key, db->get_chain_id(), fc::ecc::bip_0062 );
-  HIVE_REQUIRE_THROW( db->push_transaction( tx, database::skip_transaction_dupe_check ), fc::assert_exception );
+  HIVE_REQUIRE_THROW( push_transaction( tx, database::skip_transaction_dupe_check ), fc::assert_exception );
 }
 
 template< typename T >
@@ -1041,29 +1128,21 @@ template smt_capped_generation_policy t_smt_database_fixture< clean_database_fix
 
 void sps_proposal_database_fixture::plugin_prepare()
 {
-  int argc = boost::unit_test::framework::master_test_suite().argc;
-  char** argv = boost::unit_test::framework::master_test_suite().argv;
-  for( int i=1; i<argc; i++ )
+  auto _data_dir = common_init( [&]( appbase::application& app, int argc, char** argv )
   {
-    const std::string arg = argv[i];
-    if( arg == "--record-assert-trip" )
-      fc::enable_record_assert_trip = true;
-    if( arg == "--show-test-names" )
-      std::cout << "running test " << boost::unit_test::framework::current_test_case().p_name << std::endl;
-  }
+    db_plugin = &app.register_plugin< hive::plugins::debug_node::debug_node_plugin >();
+    db_plugin->logging = false;
+    app.initialize<
+      hive::plugins::debug_node::debug_node_plugin
+    >( argc, argv );
 
-  db_plugin = &appbase::app().register_plugin< hive::plugins::debug_node::debug_node_plugin >();
+    db = &app.get_plugin< hive::plugins::chain::chain_plugin >().db();
+    BOOST_REQUIRE( db );
+  } );
+
   init_account_pub_key = init_account_priv_key.get_public_key();
 
-  db_plugin->logging = false;
-  appbase::app().initialize<
-    hive::plugins::debug_node::debug_node_plugin
-  >( argc, argv );
-
-  db = &appbase::app().get_plugin< hive::plugins::chain::chain_plugin >().db();
-  BOOST_REQUIRE( db );
-
-  open_database();
+  open_database( _data_dir );
 
   generate_block();
   db->set_hardfork( HIVE_NUM_HARDFORKS );
@@ -1102,7 +1181,7 @@ int64_t sps_proposal_database_fixture::create_proposal( std::string creator, std
   tx.operations.push_back( op );
   tx.set_expiration( db->head_block_time() + HIVE_MAX_TIME_UNTIL_EXPIRATION );
   sign( tx, key );
-  db->push_transaction( tx, 0 );
+  push_transaction( tx, 0 );
   tx.signatures.clear();
   tx.operations.clear();
 
@@ -1138,7 +1217,7 @@ void sps_proposal_database_fixture::update_proposal(uint64_t proposal_id, std::s
   tx.operations.push_back( op );
   tx.set_expiration( db->head_block_time() + HIVE_MAX_TIME_UNTIL_EXPIRATION );
   sign( tx, key );
-  db->push_transaction( tx, 0 );
+  push_transaction( tx, 0 );
   tx.signatures.clear();
   tx.operations.clear();
 }
@@ -1155,7 +1234,7 @@ void sps_proposal_database_fixture::vote_proposal( std::string voter, const std:
   tx.set_expiration( db->head_block_time() + HIVE_MAX_TIME_UNTIL_EXPIRATION );
   tx.operations.push_back( op );
   sign( tx, key );
-  db->push_transaction( tx, 0 );
+  push_transaction( tx, 0 );
 }
 
 bool sps_proposal_database_fixture::exist_proposal( int64_t id )
@@ -1185,7 +1264,7 @@ void sps_proposal_database_fixture::remove_proposal(account_name_type _deleter, 
   trx.operations.push_back( rp );
   trx.set_expiration( db->head_block_time() + HIVE_MAX_TIME_UNTIL_EXPIRATION );
   sign( trx, _key );
-  db->push_transaction( trx, 0 );
+  push_transaction( trx, 0 );
   trx.signatures.clear();
   trx.operations.clear();
 }
@@ -1232,7 +1311,7 @@ void sps_proposal_database_fixture::witness_vote( account_name_type _voter, acco
   tx.set_expiration( db->head_block_time() + HIVE_MAX_TIME_UNTIL_EXPIRATION );
   tx.operations.push_back( op );
   sign( tx, _key );
-  db->push_transaction( tx, 0 );
+  push_transaction( tx, 0 );
 }
 
 void sps_proposal_database_fixture::proxy( account_name_type _account, account_name_type _proxy, const fc::ecc::private_key& _key )
@@ -1245,7 +1324,7 @@ void sps_proposal_database_fixture::proxy( account_name_type _account, account_n
   tx.operations.push_back( op );
   tx.set_expiration( db->head_block_time() + HIVE_MAX_TIME_UNTIL_EXPIRATION );
   sign( tx, _key );
-  db->push_transaction( tx, 0 );
+  push_transaction( tx, 0 );
 }
 
 void hf23_database_fixture::delegate_vest( const string& delegator, const string& delegatee, const asset& amount, const fc::ecc::private_key& key )
@@ -1414,45 +1493,41 @@ template bool delayed_vote_database_fixture::check_collection< delayed_voting::o
 json_rpc_database_fixture::json_rpc_database_fixture()
 {
   try {
-  int argc = boost::unit_test::framework::master_test_suite().argc;
-  char** argv = boost::unit_test::framework::master_test_suite().argv;
-  for( int i=1; i<argc; i++ )
+
+  auto _data_dir = common_init( [&]( appbase::application& app, int argc, char** argv )
   {
-    const std::string arg = argv[i];
-    if( arg == "--record-assert-trip" )
-      fc::enable_record_assert_trip = true;
-    if( arg == "--show-test-names" )
-      std::cout << "running test " << boost::unit_test::framework::current_test_case().p_name << std::endl;
-  }
+    ah_plugin = &app.register_plugin< ah_plugin_type >();
+    ah_plugin->set_destroy_database_on_startup();
+    ah_plugin->set_destroy_database_on_shutdown();
+    db_plugin = &app.register_plugin< hive::plugins::debug_node::debug_node_plugin >();
+    app.register_plugin< hive::plugins::witness::witness_plugin >();
+    rpc_plugin = &app.register_plugin< hive::plugins::json_rpc::json_rpc_plugin >();
+    app.register_plugin< hive::plugins::block_api::block_api_plugin >();
+    app.register_plugin< hive::plugins::database_api::database_api_plugin >();
+    auto* condenser_api_plugin = &app.register_plugin< hive::plugins::condenser_api::condenser_api_plugin >();
 
-  appbase::app().register_plugin< ah_plugin >();
-  db_plugin = &appbase::app().register_plugin< hive::plugins::debug_node::debug_node_plugin >();
-  appbase::app().register_plugin< hive::plugins::witness::witness_plugin >();
-  rpc_plugin = &appbase::app().register_plugin< hive::plugins::json_rpc::json_rpc_plugin >();
-  appbase::app().register_plugin< hive::plugins::block_api::block_api_plugin >();
-  appbase::app().register_plugin< hive::plugins::database_api::database_api_plugin >();
-  appbase::app().register_plugin< hive::plugins::condenser_api::condenser_api_plugin >();
-
-  db_plugin->logging = false;
-  appbase::app().initialize<
-    ah_plugin,
-    hive::plugins::debug_node::debug_node_plugin,
-    hive::plugins::json_rpc::json_rpc_plugin,
-    hive::plugins::block_api::block_api_plugin,
-    hive::plugins::database_api::database_api_plugin,
-    hive::plugins::condenser_api::condenser_api_plugin
+    db_plugin->logging = false;
+    app.initialize<
+      ah_plugin_type,
+      hive::plugins::debug_node::debug_node_plugin,
+      hive::plugins::json_rpc::json_rpc_plugin,
+      hive::plugins::block_api::block_api_plugin,
+      hive::plugins::database_api::database_api_plugin,
+      hive::plugins::condenser_api::condenser_api_plugin
     >( argc, argv );
 
-  appbase::app().get_plugin< hive::plugins::condenser_api::condenser_api_plugin >().plugin_startup();
+    condenser_api_plugin->plugin_startup();
+    rpc_plugin->finalize_startup();
 
-  rpc_plugin->finalize_startup();
-
-  db = &appbase::app().get_plugin< hive::plugins::chain::chain_plugin >().db();
-  BOOST_REQUIRE( db );
+    db = &app.get_plugin< hive::plugins::chain::chain_plugin >().db();
+    BOOST_REQUIRE( db );
+  } );
 
   init_account_pub_key = init_account_priv_key.get_public_key();
 
-  open_database();
+  ah_plugin->plugin_startup();
+
+  open_database( _data_dir );
 
   generate_block();
   db->set_hardfork( HIVE_BLOCKCHAIN_VERSION.minor_v() );
@@ -1487,6 +1562,8 @@ json_rpc_database_fixture::~json_rpc_database_fixture()
     BOOST_CHECK( db->get_node_properties().skip_flags == database::skip_nothing );
   }
 
+  if( ah_plugin )
+    ah_plugin->plugin_shutdown();
   if( data_dir )
     db->wipe( data_dir->path(), data_dir->path(), true );
   return;
@@ -1607,7 +1684,7 @@ bool _push_block( database& db, const signed_block& b, uint32_t skip_flags /* = 
 
 void _push_transaction( database& db, const signed_transaction& tx, uint32_t skip_flags /* = 0 */ )
 { try {
-  db.push_transaction( tx, skip_flags );
+  db.push_transaction( signed_transaction_transporter( tx, hive::protocol::pack_type::legacy ), skip_flags );
 } FC_CAPTURE_AND_RETHROW((tx)) }
 
 } // hive::chain::test

@@ -36,7 +36,6 @@
 #include <fc/exception/exception.hpp>
 #include <fc/io/enum_type.hpp>
 
-
 #include <vector>
 
 namespace graphene { namespace net {

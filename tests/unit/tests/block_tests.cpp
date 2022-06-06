@@ -30,9 +30,8 @@
 
 #include <hive/chain/database.hpp>
 #include <hive/chain/hive_objects.hpp>
-#include <hive/chain/history_object.hpp>
 
-#include <hive/plugins/account_history/account_history_plugin.hpp>
+#include <hive/plugins/account_history_rocksdb/account_history_rocksdb_plugin.hpp>
 #include <hive/plugins/witness/block_producer.hpp>
 
 #include <hive/utilities/tempdir.hpp>
@@ -227,8 +226,8 @@ BOOST_AUTO_TEST_CASE( fork_blocks )
     {
       auto b = bp2.generate_block(db2.get_slot_time(1), db2.get_scheduled_witness(1), init_account_priv_key, database::skip_nothing);
       good_block = b;
-      b.transactions.emplace_back(signed_transaction());
-      b.transactions.back().operations.emplace_back(transfer_operation());
+      b.transactions.emplace_back( signed_transaction_transporter( signed_transaction(), hive::protocol::pack_type::legacy ) );
+      b.transactions.back().trx.operations.emplace_back(transfer_operation());
       b.sign( init_account_priv_key );
       BOOST_CHECK_EQUAL(b.block_num(), 14u);
       HIVE_CHECK_THROW(PUSH_BLOCK( db1, b ), fc::exception);
@@ -393,7 +392,7 @@ BOOST_AUTO_TEST_CASE( tapos )
 
     BOOST_TEST_MESSAGE( "Pushing Pending Transaction" );
     idump((trx));
-    db1.push_transaction(trx);
+    db1.push_transaction( signed_transaction_transporter( trx, hive::protocol::pack_type::legacy ) );
     BOOST_TEST_MESSAGE( "Generating a block" );
     b = bp1.generate_block(db1.get_slot_time(1), db1.get_scheduled_witness(1), init_account_priv_key, database::skip_nothing);
     trx.clear();
@@ -411,7 +410,7 @@ BOOST_AUTO_TEST_CASE( tapos )
     b = bp1.generate_block(db1.get_slot_time(1), db1.get_scheduled_witness(1), init_account_priv_key, database::skip_nothing);
     trx.signatures.clear();
     trx.sign( init_account_priv_key, db1.get_chain_id(), fc::ecc::fc_canonical );
-    BOOST_REQUIRE_THROW( db1.push_transaction(trx, 0/*database::skip_transaction_signatures | database::skip_authority_check*/), fc::exception );
+    BOOST_REQUIRE_THROW( db1.push_transaction( signed_transaction_transporter( trx, hive::protocol::pack_type::legacy ), 0/*database::skip_transaction_signatures | database::skip_authority_check*/), fc::exception );
   } catch (fc::exception& e) {
     edump((e.to_detail_string()));
     throw;
@@ -501,7 +500,7 @@ BOOST_FIXTURE_TEST_CASE( double_sign_check, clean_database_fixture )
   trx.set_expiration( db->head_block_time() + HIVE_MAX_TIME_UNTIL_EXPIRATION );
   trx.validate();
 
-  db->push_transaction(trx, ~0);
+  push_transaction(trx, ~0);
 
   trx.operations.clear();
   t.from = "bob";
@@ -511,21 +510,21 @@ BOOST_FIXTURE_TEST_CASE( double_sign_check, clean_database_fixture )
   trx.validate();
 
   BOOST_TEST_MESSAGE( "Verify that not-signing causes an exception" );
-  HIVE_REQUIRE_THROW( db->push_transaction(trx, 0), fc::exception );
+  HIVE_REQUIRE_THROW( push_transaction(trx, 0), fc::exception );
 
   BOOST_TEST_MESSAGE( "Verify that double-signing causes an exception" );
   sign( trx, bob_private_key );
   sign( trx, bob_private_key );
-  HIVE_REQUIRE_THROW( db->push_transaction(trx, 0), tx_duplicate_sig );
+  HIVE_REQUIRE_THROW( push_transaction(trx, 0), tx_duplicate_sig );
 
   BOOST_TEST_MESSAGE( "Verify that signing with an extra, unused key fails" );
   trx.signatures.pop_back();
   sign( trx, generate_private_key( "bogus" ) );
-  HIVE_REQUIRE_THROW( db->push_transaction(trx, 0), tx_irrelevant_sig );
+  HIVE_REQUIRE_THROW( push_transaction(trx, 0), tx_irrelevant_sig );
 
   BOOST_TEST_MESSAGE( "Verify that signing once with the proper key passes" );
   trx.signatures.pop_back();
-  db->push_transaction(trx, 0);
+  push_transaction(trx, 0);
   sign( trx, bob_private_key );
 
 } FC_LOG_AND_RETHROW() }
@@ -734,31 +733,37 @@ BOOST_FIXTURE_TEST_CASE( hardfork_test, database_fixture )
 {
   try
   {
-    try {
-    int argc = boost::unit_test::framework::master_test_suite().argc;
-    char** argv = boost::unit_test::framework::master_test_suite().argv;
-    for( int i=1; i<argc; i++ )
+    autoscope auto_wipe( [&]()
     {
-      const std::string arg = argv[i];
-      if( arg == "--record-assert-trip" )
-        fc::enable_record_assert_trip = true;
-      if( arg == "--show-test-names" )
-        std::cout << "running test " << boost::unit_test::framework::current_test_case().p_name << std::endl;
-    }
-    appbase::app().register_plugin< hive::plugins::account_history::account_history_plugin >();
-    db_plugin = &appbase::app().register_plugin< hive::plugins::debug_node::debug_node_plugin >();
+      if( ah_plugin )
+        ah_plugin->plugin_shutdown();
+      if( data_dir )
+        db->wipe( data_dir->path(), data_dir->path(), true );
+    } );
+
+    try {
+
+    auto _data_dir = common_init( [&]( appbase::application& app, int argc, char** argv )
+    {
+      ah_plugin = &app.register_plugin< ah_plugin_type >();
+      ah_plugin->set_destroy_database_on_startup();
+      ah_plugin->set_destroy_database_on_shutdown();
+      db_plugin = &app.register_plugin< hive::plugins::debug_node::debug_node_plugin >();
+
+      app.initialize<
+        ah_plugin_type,
+        hive::plugins::debug_node::debug_node_plugin
+      >( argc, argv );
+
+      db = &app.get_plugin< hive::plugins::chain::chain_plugin >().db();
+      BOOST_REQUIRE( db );
+    } );
+    
     init_account_pub_key = init_account_priv_key.get_public_key();
 
-    appbase::app().initialize<
-      hive::plugins::account_history::account_history_plugin,
-      hive::plugins::debug_node::debug_node_plugin
-    >( argc, argv );
+    ah_plugin->plugin_startup();
 
-    db = &appbase::app().get_plugin< hive::plugins::chain::chain_plugin >().db();
-    BOOST_REQUIRE( db );
-
-
-    open_database();
+    open_database( _data_dir );
 
     generate_blocks( 2 );
 
@@ -789,7 +794,8 @@ BOOST_FIXTURE_TEST_CASE( hardfork_test, database_fixture )
     BOOST_REQUIRE( db->has_hardfork( 0 ) );
     BOOST_REQUIRE( !db->has_hardfork( HIVE_HARDFORK_0_1 ) );
 
-    auto itr = db->get_index< account_history_index >().indices().get< by_id >().end();
+    const auto& ah_idx = db->get_index< hive::plugins::account_history_rocksdb::volatile_operation_index, by_id >();
+    auto itr = ah_idx.end();
     itr--;
 
     const auto last_ah_id = itr->get_id();
@@ -799,22 +805,21 @@ BOOST_FIXTURE_TEST_CASE( hardfork_test, database_fixture )
 
     string op_msg = "Testnet: Hardfork applied";
 
-    itr = db->get_index< account_history_index >().indices().get< by_id >().upper_bound(last_ah_id);
+    itr = ah_idx.upper_bound(last_ah_id);
     /// Skip another producer_reward_op generated at last produced block
     ++itr;
 
     ilog("Looked up AH-id: ${a}, found: ${i}", ("a", last_ah_id)("i", itr->get_id()));
 
     /// Original AH record points (by_id) actual operation data. We need to query for it again
-    const buffer_type& _serialized_op = db->get(itr->op).serialized_op;
-    auto last_op = fc::raw::unpack_from_vector< hive::chain::operation >(_serialized_op);
+    auto last_op = fc::raw::unpack_from_vector< hive::chain::operation >(itr->serialized_op);
 
     BOOST_REQUIRE( db->has_hardfork( 0 ) );
     BOOST_REQUIRE( db->has_hardfork( HIVE_HARDFORK_0_1 ) );
     operation hardfork_vop = hardfork_operation( HIVE_HARDFORK_0_1 );
 
     BOOST_REQUIRE(last_op == hardfork_vop);
-    BOOST_REQUIRE(db->get(itr->op).timestamp == db->head_block_time());
+    BOOST_REQUIRE(itr->timestamp == db->head_block_time());
 
     BOOST_TEST_MESSAGE( "Testing hardfork is only applied once" );
     generate_block();
@@ -822,11 +827,9 @@ BOOST_FIXTURE_TEST_CASE( hardfork_test, database_fixture )
     auto processed_op = last_op;
 
     /// Continue (starting from last HF op position), but skip last HF op
-    for(++itr; itr != db->get_index< account_history_index >().indices().get< by_id >().end(); ++itr)
+    for(++itr; itr != ah_idx.end(); ++itr)
     {
-      const auto& ahRecord = *itr;
-      const buffer_type& _serialized_op = db->get(ahRecord.op).serialized_op;
-      processed_op = fc::raw::unpack_from_vector< hive::chain::operation >(_serialized_op);
+      processed_op = fc::raw::unpack_from_vector< hive::chain::operation >(itr->serialized_op);
     }
 
       /// There shall be no more hardfork ops after last one.
@@ -836,26 +839,22 @@ BOOST_FIXTURE_TEST_CASE( hardfork_test, database_fixture )
     BOOST_REQUIRE( db->has_hardfork( HIVE_HARDFORK_0_1 ) );
 
     /// Search again for pre-HF operation
-    itr = db->get_index< account_history_index >().indices().get< by_id >().upper_bound(last_ah_id);
+    itr = ah_idx.upper_bound(last_ah_id);
     /// Skip another producer_reward_op generated at last produced block
     ++itr;
 
     /// Here last HF vop shall be pointed, with its original time.
-    BOOST_REQUIRE( db->get(itr->op).timestamp == db->head_block_time() - HIVE_BLOCK_INTERVAL );
+    BOOST_REQUIRE( itr->timestamp == db->head_block_time() - HIVE_BLOCK_INTERVAL );
 
   }
   catch( fc::exception& e )
   {
-    db->wipe( data_dir->path(), data_dir->path(), true );
     throw e;
   }
   catch( std::exception& e )
   {
-    db->wipe( data_dir->path(), data_dir->path(), true );
     throw e;
   }
-
-  db->wipe( data_dir->path(), data_dir->path(), true );
 }
 
 BOOST_FIXTURE_TEST_CASE( generate_block_size, clean_database_fixture )
@@ -892,7 +891,7 @@ BOOST_FIXTURE_TEST_CASE( generate_block_size, clean_database_fixture )
     }
 
     sign( tx, init_account_priv_key );
-    db->push_transaction( tx, 0 );
+    push_transaction( tx, 0 );
 
     // Second transaction, tx minus op is 78 (one less byte for operation vector size)
     // We need a 88 byte op. We need a 22 character memo (1 byte for length) 55 = 32 (old op) + 55 + 1
@@ -900,13 +899,67 @@ BOOST_FIXTURE_TEST_CASE( generate_block_size, clean_database_fixture )
     tx.clear();
     tx.operations.push_back( op );
     sign( tx, init_account_priv_key );
-    db->push_transaction( tx, 0 );
+    push_transaction( tx, 0 );
 
     generate_block();
 
     // The last transfer should have been delayed due to size
     auto head_block = db->fetch_block_by_number( db->head_block_num() );
     BOOST_REQUIRE( head_block->transactions.size() == 1 );
+  }
+  FC_LOG_AND_RETHROW()
+}
+
+BOOST_AUTO_TEST_CASE( set_lower_lib_then_current )
+{
+  try {
+    // this is required to reproduce issue with setting last irreversible block
+    // before block number HIVE_START_MINER_VOTING_BLOCK, if not then other test should be added
+    BOOST_REQUIRE( HIVE_MAX_WITNESSES + 1 < HIVE_START_MINER_VOTING_BLOCK );
+
+    fc::temp_directory data_dir( hive::utilities::temp_directory_path() );
+    database db;
+    witness::block_producer bp( db );
+    db._log_hardforks = false;
+    open_test_database( db, data_dir.path() );
+
+    auto init_account_priv_key  = fc::ecc::private_key::regenerate(fc::sha256::hash(string("init_key")) );
+    {
+      uint32_t head_block_to_check = HIVE_MAX_WITNESSES - 3;
+      for( uint32_t i = 0; i < head_block_to_check; ++i )
+        bp.generate_block(db.get_slot_time(1), db.get_scheduled_witness(1), init_account_priv_key, database::skip_nothing);
+
+      db.set_last_irreversible_block_num(db.head_block_num());
+      bp.generate_block(db.get_slot_time(1), db.get_scheduled_witness(1), init_account_priv_key, database::skip_nothing);
+    }
+
+    {
+      uint32_t head_block_to_check = (HIVE_MAX_WITNESSES + HIVE_START_MINER_VOTING_BLOCK) / 2;
+      for( uint32_t i = db.head_block_num(); i < head_block_to_check; ++i )
+        bp.generate_block(db.get_slot_time(1), db.get_scheduled_witness(1), init_account_priv_key, database::skip_nothing);
+
+      db.set_last_irreversible_block_num(db.head_block_num());
+      bp.generate_block(db.get_slot_time(1), db.get_scheduled_witness(1), init_account_priv_key, database::skip_nothing);
+    }
+
+    {
+      uint32_t head_block_to_check = HIVE_START_MINER_VOTING_BLOCK + 3;
+      for( uint32_t i = db.head_block_num(); i < head_block_to_check; ++i )
+        bp.generate_block(db.get_slot_time(1), db.get_scheduled_witness(1), init_account_priv_key, database::skip_nothing);
+
+      db.set_last_irreversible_block_num(db.head_block_num());
+      bp.generate_block(db.get_slot_time(1), db.get_scheduled_witness(1), init_account_priv_key, database::skip_nothing);
+    }
+  }
+  FC_LOG_AND_RETHROW()
+}
+
+BOOST_AUTO_TEST_CASE( safe_closing_database )
+{
+  try {
+    database db;
+    fc::temp_directory data_dir( hive::utilities::temp_directory_path() );
+    db.wipe( data_dir.path(), data_dir.path(), true );
   }
   FC_LOG_AND_RETHROW()
 }

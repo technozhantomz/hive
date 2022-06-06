@@ -3,6 +3,7 @@
 #include <hive/protocol/block_header.hpp>
 #include <hive/protocol/asset.hpp>
 
+#include <fc/exception/exception.hpp>
 #include <fc/utf8.hpp>
 
 namespace hive { namespace protocol {
@@ -44,8 +45,8 @@ namespace hive { namespace protocol {
   struct comment_reward_operation : public virtual_operation
   {
     comment_reward_operation() = default;
-    comment_reward_operation( const account_name_type& a, const string& pl, const asset& p, share_type ar,
-                              const asset& tpv, const asset& cpv, const asset& bpv )
+    comment_reward_operation( const account_name_type& a, const string& pl, const HBD_asset& p, share_type ar,
+                              const HBD_asset& tpv, const HBD_asset& cpv, const HBD_asset& bpv )
       : author(a), permlink(pl), payout(p), author_rewards(ar),
         total_payout_value( tpv ), curator_payout_value( cpv ), beneficiary_payout_value( bpv ) {}
 
@@ -155,9 +156,12 @@ namespace hive { namespace protocol {
 
   struct account_created_operation : public virtual_operation
   {
-    account_created_operation(){}
+    account_created_operation() {}
     account_created_operation( const string& new_account_name, const string& creator, const asset& initial_vesting_shares, const asset& initial_delegation )
-      :new_account_name(new_account_name), creator(creator), initial_vesting_shares(initial_vesting_shares), initial_delegation(initial_delegation) {}
+      :new_account_name(new_account_name), creator(creator), initial_vesting_shares(initial_vesting_shares), initial_delegation(initial_delegation)
+    {
+      FC_ASSERT(creator.size(), "Every account should have a creator");
+    }
 
     account_name_type new_account_name;
     account_name_type creator;
@@ -189,6 +193,16 @@ namespace hive { namespace protocol {
     asset             open_pays;
   };
 
+  struct limit_order_cancelled_operation : public virtual_operation
+  {
+    limit_order_cancelled_operation() = default;
+    limit_order_cancelled_operation(const string& _seller, uint32_t _order_id, const asset& _amount_back)
+      :seller(_seller), orderid(_order_id), amount_back(_amount_back) {}
+
+    account_name_type seller;
+    uint32_t          orderid = 0;
+    asset             amount_back;
+  };
 
   struct fill_transfer_from_savings_operation : public virtual_operation
   {
@@ -223,8 +237,10 @@ namespace hive { namespace protocol {
   struct effective_comment_vote_operation : public virtual_operation
   {
     effective_comment_vote_operation() = default;
-    effective_comment_vote_operation(const account_name_type& _voter, const account_name_type& _author, const string& _permlink) :
-      voter(_voter), author(_author), permlink(_permlink) {}
+    effective_comment_vote_operation(const account_name_type& _voter, const account_name_type& _author,
+      const string& _permlink, uint64_t _weight, int64_t _rshares, uint64_t _total_vote_weight)
+    : voter(_voter), author(_author), permlink(_permlink), weight(_weight), rshares(_rshares),
+      total_vote_weight(_total_vote_weight) {}
 
     account_name_type voter;
     account_name_type author;
@@ -321,17 +337,20 @@ namespace hive { namespace protocol {
   struct hardfork_hive_operation : public virtual_operation
   {
     hardfork_hive_operation() {}
-    hardfork_hive_operation( const account_name_type& acc, const account_name_type& _treasury,
-      const asset& s, const asset& st, const asset& v, const asset& cs )
-      : account( acc ), treasury( _treasury ), hbd_transferred( s ), hive_transferred( st ), vests_converted( v ), total_hive_from_vests(cs)
+    //other_affected_accounts as well as assets transfered have to be filled during actual operation
+    hardfork_hive_operation( const account_name_type& acc, const account_name_type& _treasury )
+    : account( acc ), treasury( _treasury ), hbd_transferred( 0, HBD_SYMBOL ), hive_transferred( 0, HIVE_SYMBOL ),
+      vests_converted( 0, VESTS_SYMBOL ), total_hive_from_vests( 0, HIVE_SYMBOL )
     {}
 
     account_name_type account;
     account_name_type treasury;
-    asset             hbd_transferred;
-    asset             hive_transferred;
-    asset             vests_converted; // Amount of converted vests
-    asset             total_hive_from_vests; // Resulting HIVE from conversion
+    std::vector< account_name_type >
+                      other_affected_accounts; // delegatees that lost delegations from account - filled before pre notification
+    asset             hbd_transferred; // filled only in post notification
+    asset             hive_transferred; // filled only in post notification
+    asset             vests_converted; // Amount of converted vests - filled only in post notification
+    asset             total_hive_from_vests; // Resulting HIVE from conversion - filled only in post notification
   };
 
   struct hardfork_hive_restore_operation : public virtual_operation
@@ -419,6 +438,7 @@ FC_REFLECT( hive::protocol::pow_reward_operation, (worker)(reward) )
 FC_REFLECT( hive::protocol::vesting_shares_split_operation, (owner)(vesting_shares_before_split)(vesting_shares_after_split) )
 FC_REFLECT( hive::protocol::shutdown_witness_operation, (owner) )
 FC_REFLECT( hive::protocol::fill_order_operation, (current_owner)(current_orderid)(current_pays)(open_owner)(open_orderid)(open_pays) )
+FC_REFLECT( hive::protocol::limit_order_cancelled_operation, (seller)(amount_back))
 FC_REFLECT( hive::protocol::fill_transfer_from_savings_operation, (from)(to)(amount)(request_id)(memo) )
 FC_REFLECT( hive::protocol::hardfork_operation, (hardfork_id) )
 FC_REFLECT( hive::protocol::comment_payout_update_operation, (author)(permlink) )
@@ -432,7 +452,7 @@ FC_REFLECT( hive::protocol::consolidate_treasury_balance_operation, ( total_move
 FC_REFLECT( hive::protocol::delayed_voting_operation, (voter)(votes) )
 FC_REFLECT( hive::protocol::sps_fund_operation, (fund_account)(additional_funds) )
 FC_REFLECT( hive::protocol::sps_convert_operation, (fund_account)(hive_amount_in)(hbd_amount_out) )
-FC_REFLECT( hive::protocol::hardfork_hive_operation, (account)(treasury)(hbd_transferred)(hive_transferred)(vests_converted)(total_hive_from_vests) )
+FC_REFLECT( hive::protocol::hardfork_hive_operation, (account)(treasury)(other_affected_accounts)(hbd_transferred)(hive_transferred)(vests_converted)(total_hive_from_vests) )
 FC_REFLECT( hive::protocol::hardfork_hive_restore_operation, (account)(treasury)(hbd_transferred)(hive_transferred) )
 FC_REFLECT( hive::protocol::expired_account_notification_operation, (account) )
 FC_REFLECT( hive::protocol::changed_recovery_account_operation, (account)(old_recovery_account)(new_recovery_account) )

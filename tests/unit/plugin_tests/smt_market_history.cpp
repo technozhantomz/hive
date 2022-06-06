@@ -20,31 +20,24 @@ BOOST_AUTO_TEST_CASE( smt_mh_test )
 
   try
   {
-    int argc = boost::unit_test::framework::master_test_suite().argc;
-    char** argv = boost::unit_test::framework::master_test_suite().argv;
-    for( int i=1; i<argc; i++ )
+    auto _data_dir = common_init( [&]( appbase::application& app, int argc, char** argv )
     {
-      const std::string arg = argv[i];
-      if( arg == "--record-assert-trip" )
-        fc::enable_record_assert_trip = true;
-      if( arg == "--show-test-names" )
-        std::cout << "running test " << boost::unit_test::framework::current_test_case().p_name << std::endl;
-    }
+      app.register_plugin< market_history_plugin >();
+      db_plugin = &app.register_plugin< hive::plugins::debug_node::debug_node_plugin >();
 
-    appbase::app().register_plugin< market_history_plugin >();
-    db_plugin = &appbase::app().register_plugin< hive::plugins::debug_node::debug_node_plugin >();
+      db_plugin->logging = false;
+      app.initialize<
+        hive::plugins::market_history::market_history_plugin,
+        hive::plugins::debug_node::debug_node_plugin
+      >( argc, argv );
+
+      db = &app.get_plugin< hive::plugins::chain::chain_plugin >().db();
+      BOOST_REQUIRE( db );
+    } );
+
     init_account_pub_key = init_account_priv_key.get_public_key();
 
-    db_plugin->logging = false;
-    appbase::app().initialize<
-      hive::plugins::market_history::market_history_plugin,
-      hive::plugins::debug_node::debug_node_plugin
-    >( argc, argv );
-
-    db = &appbase::app().get_plugin< hive::plugins::chain::chain_plugin >().db();
-    BOOST_REQUIRE( db );
-
-    open_database();
+    open_database( _data_dir );
 
     generate_block();
     db->set_hardfork( HIVE_NUM_HARDFORKS );
@@ -93,7 +86,7 @@ BOOST_AUTO_TEST_CASE( smt_mh_test )
     tx.operations.push_back( op );
     tx.set_expiration( db->head_block_time() + HIVE_MAX_TIME_UNTIL_EXPIRATION );
     sign( tx, alice_private_key );
-    db->push_transaction( tx, 0 );
+    push_transaction( tx, 0 );
 
     tx.operations.clear();
     tx.signatures.clear();
@@ -103,7 +96,7 @@ BOOST_AUTO_TEST_CASE( smt_mh_test )
     op.min_to_receive = asset( 750, any_smt_symbol );
     tx.operations.push_back( op );
     sign( tx, bob_private_key );
-    db->push_transaction( tx, 0 );
+    push_transaction( tx, 0 );
 
     generate_blocks( db->head_block_time() + ( 60 * 90 ) );
 
@@ -118,7 +111,7 @@ BOOST_AUTO_TEST_CASE( smt_mh_test )
     tx.operations.push_back( op );
     tx.set_expiration( db->head_block_time() + HIVE_MAX_TIME_UNTIL_EXPIRATION );
     sign( tx, sam_private_key );
-    db->push_transaction( tx, 0 );
+    push_transaction( tx, 0 );
 
     generate_blocks( db->head_block_time() + 60 );
 
@@ -133,7 +126,7 @@ BOOST_AUTO_TEST_CASE( smt_mh_test )
     tx.operations.push_back( op );
     tx.set_expiration( db->head_block_time() + HIVE_MAX_TIME_UNTIL_EXPIRATION );
     sign( tx, alice_private_key );
-    db->push_transaction( tx, 0 );
+    push_transaction( tx, 0 );
 
     tx.operations.clear();
     tx.signatures.clear();
@@ -144,7 +137,7 @@ BOOST_AUTO_TEST_CASE( smt_mh_test )
     tx.operations.push_back( op );
     tx.set_expiration( db->head_block_time() + HIVE_MAX_TIME_UNTIL_EXPIRATION );
     sign( tx, bob_private_key );
-    db->push_transaction( tx, 0 );
+    push_transaction( tx, 0 );
     validate_database();
 
     auto bucket = bucket_idx.begin();

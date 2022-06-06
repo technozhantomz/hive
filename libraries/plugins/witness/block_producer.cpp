@@ -4,6 +4,7 @@
 #include <hive/protocol/config.hpp>
 #include <hive/protocol/version.hpp>
 
+#include <hive/chain/database.hpp>
 #include <hive/chain/database_exceptions.hpp>
 #include <hive/chain/db_with.hpp>
 #include <hive/chain/pending_required_action_object.hpp>
@@ -135,9 +136,13 @@ void block_producer::apply_pending_transactions(
           });
   }
 
+  BOOST_SCOPE_EXIT( &_db ) { _db.clear_tx_status(); } BOOST_SCOPE_EXIT_END
+  // the flag also covers time of processing of required and optional actions
+  _db.set_tx_status( chain::database::TX_STATUS_NEW_BLOCK );
+
   uint64_t postponed_tx_count = 0;
   // pop pending state (reset to head block state)
-  for( const chain::signed_transaction& tx : _db._pending_tx )
+  for( const auto& tx : _db._pending_tx )
   {
     // Only include transactions that have not expired yet for currently generating block,
     // this should clear problem transactions and allow block production to continue
@@ -145,7 +150,7 @@ void block_producer::apply_pending_transactions(
     if( postponed_tx_count > HIVE_BLOCK_GENERATION_POSTPONED_TX_LIMIT )
       break;
 
-    if( tx.expiration < when )
+    if( tx.trx.expiration < when )
       continue;
 
     uint64_t new_total_size = total_block_size + fc::raw::pack_size( tx );
@@ -168,7 +173,8 @@ void block_producer::apply_pending_transactions(
     }
     catch ( const fc::exception& e )
     {
-      // Do nothing, transaction will not be re-applied
+      // Do nothing, transaction will be re-applied after this block is reapplied (and possibly
+      // after processing further blocks) until it expires or repeats the exception during that time
       //wlog( "Transaction was not processed while generating block due to ${e}", ("e", e) );
       //wlog( "The transaction was ${t}", ("t", tx) );
     }

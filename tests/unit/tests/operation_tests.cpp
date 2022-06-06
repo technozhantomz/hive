@@ -120,7 +120,7 @@ BOOST_AUTO_TEST_CASE( account_create_apply )
     tx.operations.push_back( op );
     sign( tx, init_account_priv_key );
     tx.validate();
-    HIVE_REQUIRE_THROW( db->push_transaction( tx, 0 ), fc::assert_exception );
+    HIVE_REQUIRE_THROW( push_transaction( tx, 0 ), fc::assert_exception );
 
     BOOST_TEST_MESSAGE( "--- Test normal account creation" );
     op.fee = asset( 100, HIVE_SYMBOL );
@@ -128,7 +128,7 @@ BOOST_AUTO_TEST_CASE( account_create_apply )
     tx.operations.push_back( op );
     sign( tx, init_account_priv_key );
     tx.validate();
-    db->push_transaction( tx, 0 );
+    push_transaction( tx, 0 );
 
     const account_object& acct = db->get_account( "alice" );
     const account_authority_object& acct_auth = db->get< account_authority_object, by_account >( "alice" );
@@ -150,7 +150,7 @@ BOOST_AUTO_TEST_CASE( account_create_apply )
     validate_database();
 
     BOOST_TEST_MESSAGE( "--- Test failure of duplicate account creation" );
-    BOOST_REQUIRE_THROW( db->push_transaction( tx, database::skip_transaction_dupe_check ), fc::exception );
+    BOOST_REQUIRE_THROW( push_transaction( tx, database::skip_transaction_dupe_check ), fc::exception );
 
     BOOST_REQUIRE( acct.name == "alice" );
     BOOST_REQUIRE( acct_auth.owner == authority( 1, priv_key.get_public_key(), 1 ) );
@@ -173,7 +173,7 @@ BOOST_AUTO_TEST_CASE( account_create_apply )
     op.new_account_name = "bob";
     tx.operations.push_back( op );
     sign( tx, init_account_priv_key );
-    HIVE_REQUIRE_THROW( db->push_transaction( tx, 0 ), fc::exception );
+    HIVE_REQUIRE_THROW( push_transaction( tx, 0 ), fc::exception );
     validate_database();
 
     BOOST_TEST_MESSAGE( "--- Test failure covering witness fee" );
@@ -191,7 +191,7 @@ BOOST_AUTO_TEST_CASE( account_create_apply )
     op.fee = ASSET( "0.100 TESTS" );
     tx.operations.push_back( op );
     sign( tx, init_account_priv_key );
-    HIVE_REQUIRE_THROW( db->push_transaction( tx, 0 ), fc::exception );
+    HIVE_REQUIRE_THROW( push_transaction( tx, 0 ), fc::exception );
     validate_database();
 
     fund( HIVE_TEMP_ACCOUNT, ASSET( "10.000 TESTS" ) );
@@ -203,7 +203,7 @@ BOOST_AUTO_TEST_CASE( account_create_apply )
     op.new_account_name = "bob";
     tx.clear();
     tx.operations.push_back( op );
-    db->push_transaction( tx, 0 );
+    push_transaction( tx, 0 );
 
     BOOST_REQUIRE( !db->get_account( "bob" ).has_recovery_account() );
     validate_database();
@@ -234,7 +234,7 @@ BOOST_AUTO_TEST_CASE( account_update_validate )
       tx.set_expiration( db->head_block_time() + HIVE_MAX_TIME_UNTIL_EXPIRATION );
       tx.operations.push_back( op );
       sign( tx, alice_private_key );
-      db->push_transaction( tx, 0 );
+      push_transaction( tx, 0 );
 
       BOOST_FAIL( "An exception was not thrown for an invalid account name" );
     }
@@ -269,31 +269,31 @@ BOOST_AUTO_TEST_CASE( account_update_authorities )
 
     BOOST_TEST_MESSAGE( "  Tests when owner authority is not updated ---" );
     BOOST_TEST_MESSAGE( "--- Test failure when no signature" );
-    HIVE_REQUIRE_THROW( db->push_transaction( tx, 0 ), tx_missing_active_auth );
+    HIVE_REQUIRE_THROW( push_transaction( tx, 0 ), tx_missing_active_auth );
 
     BOOST_TEST_MESSAGE( "--- Test failure when wrong signature" );
     sign( tx, bob_private_key );
-    HIVE_REQUIRE_THROW( db->push_transaction( tx, 0 ), tx_missing_active_auth );
+    HIVE_REQUIRE_THROW( push_transaction( tx, 0 ), tx_missing_active_auth );
 
     BOOST_TEST_MESSAGE( "--- Test failure when containing additional incorrect signature" );
     sign( tx, alice_private_key );
-    HIVE_REQUIRE_THROW( db->push_transaction( tx, 0 ), tx_irrelevant_sig );
+    HIVE_REQUIRE_THROW( push_transaction( tx, 0 ), tx_irrelevant_sig );
 
     BOOST_TEST_MESSAGE( "--- Test failure when containing duplicate signatures" );
     tx.signatures.clear();
     sign( tx, active_key );
     sign( tx, active_key );
-    HIVE_REQUIRE_THROW( db->push_transaction( tx, 0 ), tx_duplicate_sig );
+    HIVE_REQUIRE_THROW( push_transaction( tx, 0 ), tx_duplicate_sig );
 
     BOOST_TEST_MESSAGE( "--- Test success on active key" );
     tx.signatures.clear();
     sign( tx, active_key );
-    db->push_transaction( tx, 0 );
+    push_transaction( tx, 0 );
 
     BOOST_TEST_MESSAGE( "--- Test success on owner key alone" );
     tx.signatures.clear();
     sign( tx, alice_private_key );
-    db->push_transaction( tx, database::skip_transaction_dupe_check );
+    push_transaction( tx, database::skip_transaction_dupe_check );
 
     BOOST_TEST_MESSAGE( "  Tests when owner authority is updated ---" );
     BOOST_TEST_MESSAGE( "--- Test failure when updating the owner authority with an active key" );
@@ -302,27 +302,27 @@ BOOST_AUTO_TEST_CASE( account_update_authorities )
     op.owner = authority( 1, active_key.get_public_key(), 1 );
     tx.operations.push_back( op );
     sign( tx, active_key );
-    HIVE_REQUIRE_THROW( db->push_transaction( tx, 0 ), tx_missing_owner_auth );
+    HIVE_REQUIRE_THROW( push_transaction( tx, 0 ), tx_missing_owner_auth );
 
     BOOST_TEST_MESSAGE( "--- Test failure when owner key and active key are present" );
     sign( tx, alice_private_key );
-    HIVE_REQUIRE_THROW( db->push_transaction( tx, 0 ), tx_irrelevant_sig );
+    HIVE_REQUIRE_THROW( push_transaction( tx, 0 ), tx_irrelevant_sig );
 
     BOOST_TEST_MESSAGE( "--- Test failure when incorrect signature" );
     tx.signatures.clear();
     sign( tx, alice_post_key );
-    HIVE_REQUIRE_THROW( db->push_transaction( tx, 0), tx_missing_owner_auth );
+    HIVE_REQUIRE_THROW( push_transaction( tx, 0), tx_missing_owner_auth );
 
     BOOST_TEST_MESSAGE( "--- Test failure when duplicate owner keys are present" );
     tx.signatures.clear();
     sign( tx, alice_private_key );
     sign( tx, alice_private_key );
-    HIVE_REQUIRE_THROW( db->push_transaction( tx, 0), tx_duplicate_sig );
+    HIVE_REQUIRE_THROW( push_transaction( tx, 0), tx_duplicate_sig );
 
     BOOST_TEST_MESSAGE( "--- Test success when updating the owner authority with an owner key" );
     tx.signatures.clear();
     sign( tx, alice_private_key );
-    db->push_transaction( tx, 0 );
+    push_transaction( tx, 0 );
 
     validate_database();
   }
@@ -351,7 +351,7 @@ BOOST_AUTO_TEST_CASE( account_update_apply )
     tx.operations.push_back( op );
     tx.set_expiration( db->head_block_time() + HIVE_MAX_TIME_UNTIL_EXPIRATION );
     sign( tx, alice_private_key );
-    db->push_transaction( tx, 0 );
+    push_transaction( tx, 0 );
 
     const account_object& acct = db->get_account( "alice" );
     const account_authority_object& acct_auth = db->get< account_authority_object, by_account >( "alice" );
@@ -373,7 +373,7 @@ BOOST_AUTO_TEST_CASE( account_update_apply )
     op.account = "bob";
     tx.operations.push_back( op );
     sign( tx, new_private_key );
-    HIVE_REQUIRE_THROW( db->push_transaction( tx, 0 ), fc::exception )
+    HIVE_REQUIRE_THROW( push_transaction( tx, 0 ), fc::exception )
     validate_database();
 
 
@@ -386,7 +386,7 @@ BOOST_AUTO_TEST_CASE( account_update_apply )
     op.posting->add_authorities( "dave", 1 );
     tx.operations.push_back( op );
     sign( tx, new_private_key );
-    HIVE_REQUIRE_THROW( db->push_transaction( tx, 0 ), fc::exception );
+    HIVE_REQUIRE_THROW( push_transaction( tx, 0 ), fc::exception );
     validate_database();
   }
   FC_LOG_AND_RETHROW()
@@ -427,26 +427,26 @@ BOOST_AUTO_TEST_CASE( comment_authorities )
     tx.set_expiration( db->head_block_time() + HIVE_MAX_TIME_UNTIL_EXPIRATION );
 
     BOOST_TEST_MESSAGE( "--- Test failure when no signatures" );
-    HIVE_REQUIRE_THROW( db->push_transaction( tx, 0 ), tx_missing_posting_auth );
+    HIVE_REQUIRE_THROW( push_transaction( tx, 0 ), tx_missing_posting_auth );
 
     BOOST_TEST_MESSAGE( "--- Test failure when duplicate signatures" );
     sign( tx, alice_post_key );
     sign( tx, alice_post_key );
-    HIVE_REQUIRE_THROW( db->push_transaction( tx, 0 ), tx_duplicate_sig );
+    HIVE_REQUIRE_THROW( push_transaction( tx, 0 ), tx_duplicate_sig );
 
     BOOST_TEST_MESSAGE( "--- Test success with post signature" );
     tx.signatures.clear();
     sign( tx, alice_post_key );
-    db->push_transaction( tx, 0 );
+    push_transaction( tx, 0 );
 
     BOOST_TEST_MESSAGE( "--- Test failure when signed by an additional signature not in the creator's authority" );
     sign( tx, bob_private_key );
-    HIVE_REQUIRE_THROW( db->push_transaction( tx, database::skip_transaction_dupe_check ), tx_irrelevant_sig );
+    HIVE_REQUIRE_THROW( push_transaction( tx, database::skip_transaction_dupe_check ), tx_irrelevant_sig );
 
     BOOST_TEST_MESSAGE( "--- Test failure when signed by a signature not in the creator's authority" );
     tx.signatures.clear();
     sign( tx, bob_private_key );
-    HIVE_REQUIRE_THROW( db->push_transaction( tx, database::skip_transaction_dupe_check ), tx_missing_posting_auth );
+    HIVE_REQUIRE_THROW( push_transaction( tx, database::skip_transaction_dupe_check ), tx_missing_posting_auth );
 
     validate_database();
   }
@@ -477,7 +477,7 @@ BOOST_AUTO_TEST_CASE( comment_apply )
     BOOST_TEST_MESSAGE( "--- Test Alice posting a root comment" );
     tx.operations.push_back( op );
     sign( tx, alice_private_key );
-    db->push_transaction( tx, 0 );
+    push_transaction( tx, 0 );
 
     const comment_object& alice_comment = db->get_comment( "alice", string( "lorem" ) );
     const comment_cashout_object* alice_comment_cashout = db->find_comment_cashout( alice_comment );
@@ -485,14 +485,12 @@ BOOST_AUTO_TEST_CASE( comment_apply )
     BOOST_REQUIRE( alice_comment.get_author_and_permlink_hash() == comment_object::compute_author_and_permlink_hash( get_account_id( "alice" ), "lorem" ) );
     BOOST_REQUIRE( alice_comment_cashout != nullptr );
     BOOST_CHECK_EQUAL( alice_comment_cashout->get_comment_id(), alice_comment.get_id() );
-    BOOST_CHECK_EQUAL( alice_comment_cashout->author_id, get_account_id( op.author ) );
-    BOOST_CHECK_EQUAL( to_string( alice_comment_cashout->permlink ), "lorem" );
+    BOOST_CHECK_EQUAL( alice_comment_cashout->get_author_id(), get_account_id( op.author ) );
+    BOOST_CHECK_EQUAL( to_string( alice_comment_cashout->get_permlink() ), "lorem" );
     BOOST_REQUIRE( alice_comment.is_root() );
-    BOOST_REQUIRE( alice_comment_cashout->active == db->head_block_time() );
     BOOST_REQUIRE( alice_comment_cashout->get_creation_time() == db->head_block_time() );
-    BOOST_REQUIRE( alice_comment_cashout->net_rshares.value == 0 );
-    BOOST_REQUIRE( alice_comment_cashout->abs_rshares.value == 0 );
-    BOOST_REQUIRE( alice_comment_cashout->cashout_time == fc::time_point_sec( db->head_block_time() + fc::seconds( HIVE_CASHOUT_WINDOW_SECONDS ) ) );
+    BOOST_REQUIRE( alice_comment_cashout->get_net_rshares() == 0 );
+    BOOST_REQUIRE( alice_comment_cashout->get_cashout_time() == fc::time_point_sec( db->head_block_time() + fc::seconds( HIVE_CASHOUT_WINDOW_SECONDS ) ) );
 
     validate_database();
 
@@ -506,7 +504,7 @@ BOOST_AUTO_TEST_CASE( comment_apply )
     tx.operations.clear();
     tx.operations.push_back( op );
     sign( tx, bob_private_key );
-    HIVE_REQUIRE_THROW( db->push_transaction( tx, 0 ), fc::exception );
+    HIVE_REQUIRE_THROW( push_transaction( tx, 0 ), fc::exception );
 
     BOOST_TEST_MESSAGE( "--- Test Bob posting a comment on Alice's comment" );
     op.parent_permlink = "lorem";
@@ -515,7 +513,7 @@ BOOST_AUTO_TEST_CASE( comment_apply )
     tx.operations.clear();
     tx.operations.push_back( op );
     sign( tx, bob_private_key );
-    db->push_transaction( tx, 0 );
+    push_transaction( tx, 0 );
 
     const comment_object& bob_comment = db->get_comment( "bob", string( "ipsum" ) );
     const comment_cashout_object* bob_comment_cashout = db->find_comment_cashout( bob_comment );
@@ -523,15 +521,12 @@ BOOST_AUTO_TEST_CASE( comment_apply )
     BOOST_CHECK_EQUAL( bob_comment.get_author_and_permlink_hash(), comment_object::compute_author_and_permlink_hash( get_account_id( "bob" ), "ipsum" ) );
     BOOST_REQUIRE( bob_comment_cashout != nullptr );
     BOOST_CHECK_EQUAL( bob_comment_cashout->get_comment_id(), bob_comment.get_id() );
-    BOOST_CHECK_EQUAL( bob_comment_cashout->author_id, get_account_id( "bob" ) );
-    BOOST_CHECK_EQUAL( to_string( bob_comment_cashout->permlink ), "ipsum" );
+    BOOST_CHECK_EQUAL( bob_comment_cashout->get_author_id(), get_account_id( "bob" ) );
+    BOOST_CHECK_EQUAL( to_string( bob_comment_cashout->get_permlink() ), "ipsum" );
     BOOST_REQUIRE( bob_comment.get_parent_id() == alice_comment.get_id() );
-    BOOST_REQUIRE( bob_comment_cashout->active == db->head_block_time() );
     BOOST_REQUIRE( bob_comment_cashout->get_creation_time() == db->head_block_time() );
-    BOOST_REQUIRE( bob_comment_cashout->net_rshares.value == 0 );
-    BOOST_REQUIRE( bob_comment_cashout->abs_rshares.value == 0 );
-    BOOST_REQUIRE( bob_comment_cashout->cashout_time == bob_comment_cashout->get_creation_time() + HIVE_CASHOUT_WINDOW_SECONDS );
-    BOOST_REQUIRE( bob_comment.get_root_id() == alice_comment.get_id() );
+    BOOST_REQUIRE( bob_comment_cashout->get_net_rshares() == 0 );
+    BOOST_REQUIRE( bob_comment_cashout->get_cashout_time() == bob_comment_cashout->get_creation_time() + HIVE_CASHOUT_WINDOW_SECONDS );
     validate_database();
 
     BOOST_TEST_MESSAGE( "--- Test Sam posting a comment on Bob's comment" );
@@ -545,7 +540,7 @@ BOOST_AUTO_TEST_CASE( comment_apply )
     tx.operations.clear();
     tx.operations.push_back( op );
     sign( tx, sam_private_key );
-    db->push_transaction( tx, 0 );
+    push_transaction( tx, 0 );
 
     const comment_object& sam_comment = db->get_comment( "sam", string( "dolor" ) );
     const comment_cashout_object* sam_comment_cashout = db->find_comment_cashout( sam_comment );
@@ -553,15 +548,12 @@ BOOST_AUTO_TEST_CASE( comment_apply )
     BOOST_REQUIRE( sam_comment.get_author_and_permlink_hash() == comment_object::compute_author_and_permlink_hash( get_account_id( "sam" ), "dolor" ) );
     BOOST_REQUIRE( sam_comment_cashout != nullptr );
     BOOST_CHECK_EQUAL( sam_comment_cashout->get_comment_id(), sam_comment.get_id() );
-    BOOST_CHECK_EQUAL( sam_comment_cashout->author_id, get_account_id( "sam" ) );
-    BOOST_CHECK_EQUAL( to_string( sam_comment_cashout->permlink ), "dolor" );
+    BOOST_CHECK_EQUAL( sam_comment_cashout->get_author_id(), get_account_id( "sam" ) );
+    BOOST_CHECK_EQUAL( to_string( sam_comment_cashout->get_permlink() ), "dolor" );
     BOOST_REQUIRE( sam_comment.get_parent_id() == bob_comment.get_id() );
-    BOOST_REQUIRE( sam_comment_cashout->active == db->head_block_time() );
     BOOST_REQUIRE( sam_comment_cashout->get_creation_time() == db->head_block_time() );
-    BOOST_REQUIRE( sam_comment_cashout->net_rshares.value == 0 );
-    BOOST_REQUIRE( sam_comment_cashout->abs_rshares.value == 0 );
-    BOOST_REQUIRE( sam_comment_cashout->cashout_time == sam_comment_cashout->get_creation_time() + HIVE_CASHOUT_WINDOW_SECONDS );
-    BOOST_REQUIRE( sam_comment.get_root_id() == alice_comment.get_id() );
+    BOOST_REQUIRE( sam_comment_cashout->get_net_rshares() == 0 );
+    BOOST_REQUIRE( sam_comment_cashout->get_cashout_time() == sam_comment_cashout->get_creation_time() + HIVE_CASHOUT_WINDOW_SECONDS );
     validate_database();
 
     generate_blocks( 60 * 5 / HIVE_BLOCK_INTERVAL + 1 );
@@ -579,8 +571,7 @@ BOOST_AUTO_TEST_CASE( comment_apply )
 
     db->modify( *mod_sam_comment_cashout, [&]( comment_cashout_object& com )
     {
-      com.net_rshares = 10;
-      com.abs_rshares = 10;
+      com.accumulate_vote_rshares( -com.get_net_rshares() + 10, 0 ); //com.net_rshares = 10;
     });
 
     db->modify( db->get_dynamic_global_properties(), [&]( dynamic_global_property_object& o)
@@ -596,17 +587,16 @@ BOOST_AUTO_TEST_CASE( comment_apply )
     tx.operations.push_back( op );
     tx.set_expiration( db->head_block_time() + HIVE_MAX_TIME_UNTIL_EXPIRATION );
     sign( tx, sam_private_key );
-    db->push_transaction( tx, 0 );
+    push_transaction( tx, 0 );
 
     BOOST_REQUIRE( mod_sam_comment.get_author_and_permlink_hash() == comment_object::compute_author_and_permlink_hash( get_account_id( "sam" ), "dolor" ) );
     BOOST_REQUIRE( mod_sam_comment_cashout != nullptr );
     BOOST_CHECK_EQUAL( mod_sam_comment_cashout->get_comment_id(), mod_sam_comment.get_id() );
-    BOOST_CHECK_EQUAL( mod_sam_comment_cashout->author_id, get_account_id( "sam" ) );
-    BOOST_CHECK_EQUAL( to_string( mod_sam_comment_cashout->permlink ), "dolor" );
+    BOOST_CHECK_EQUAL( mod_sam_comment_cashout->get_author_id(), get_account_id( "sam" ) );
+    BOOST_CHECK_EQUAL( to_string( mod_sam_comment_cashout->get_permlink() ), "dolor" );
     BOOST_REQUIRE( mod_sam_comment.get_parent_id() == mod_bob_comment.get_id() );
-    BOOST_REQUIRE( mod_sam_comment_cashout->active == db->head_block_time() );
     BOOST_REQUIRE( mod_sam_comment_cashout->get_creation_time() == created );
-    BOOST_REQUIRE( mod_sam_comment_cashout->cashout_time == mod_sam_comment_cashout->get_creation_time() + HIVE_CASHOUT_WINDOW_SECONDS );
+    BOOST_REQUIRE( mod_sam_comment_cashout->get_cashout_time() == mod_sam_comment_cashout->get_creation_time() + HIVE_CASHOUT_WINDOW_SECONDS );
     validate_database();
 
     BOOST_TEST_MESSAGE( "--- Test comment edit rate limit" );
@@ -614,9 +604,9 @@ BOOST_AUTO_TEST_CASE( comment_apply )
     tx.clear();
     tx.operations.push_back( op );
     sign( tx, sam_private_key );
-    HIVE_REQUIRE_THROW( db->push_transaction( tx, 0 ), fc::assert_exception );
+    HIVE_REQUIRE_THROW( push_transaction( tx, 0 ), fc::assert_exception );
     generate_block();
-    db->push_transaction( tx, 0 );
+    push_transaction( tx, 0 );
 
     BOOST_TEST_MESSAGE( "--- Test failure posting withing 1 minute" );
 
@@ -628,7 +618,7 @@ BOOST_AUTO_TEST_CASE( comment_apply )
     tx.set_expiration( db->head_block_time() + HIVE_MAX_TIME_UNTIL_EXPIRATION );
     tx.operations.push_back( op );
     sign( tx, sam_private_key );
-    db->push_transaction( tx, 0 );
+    push_transaction( tx, 0 );
 
     generate_blocks( 60 * 5 / HIVE_BLOCK_INTERVAL );
 
@@ -638,12 +628,12 @@ BOOST_AUTO_TEST_CASE( comment_apply )
     tx.set_expiration( db->head_block_time() + HIVE_MAX_TIME_UNTIL_EXPIRATION );
     tx.operations.push_back( op );
     sign( tx, sam_private_key );
-    HIVE_REQUIRE_THROW( db->push_transaction( tx, 0 ), fc::exception );
+    HIVE_REQUIRE_THROW( push_transaction( tx, 0 ), fc::exception );
 
     validate_database();
 
     generate_block();
-    db->push_transaction( tx, 0 );
+    push_transaction( tx, 0 );
     validate_database();
   }
   FC_LOG_AND_RETHROW()
@@ -680,7 +670,7 @@ BOOST_AUTO_TEST_CASE( comment_delete_apply )
     tx.operations.push_back( vote );
     tx.set_expiration( db->head_block_time() + HIVE_MIN_TRANSACTION_EXPIRATION_LIMIT );
     sign( tx, alice_private_key );
-    db->push_transaction( tx, 0 );
+    push_transaction( tx, 0 );
 
     BOOST_TEST_MESSAGE( "--- Test failue deleting a comment with positive rshares" );
 
@@ -690,7 +680,7 @@ BOOST_AUTO_TEST_CASE( comment_delete_apply )
     tx.clear();
     tx.operations.push_back( op );
     sign( tx, alice_private_key );
-    HIVE_REQUIRE_THROW( db->push_transaction( tx, 0 ), fc::assert_exception );
+    HIVE_REQUIRE_THROW( push_transaction( tx, 0 ), fc::assert_exception );
 
 
     BOOST_TEST_MESSAGE( "--- Test success deleting a comment with negative rshares" );
@@ -701,7 +691,7 @@ BOOST_AUTO_TEST_CASE( comment_delete_apply )
     tx.operations.push_back( vote );
     tx.operations.push_back( op );
     sign( tx, alice_private_key );
-    db->push_transaction( tx, 0 );
+    push_transaction( tx, 0 );
 
     auto test_comment = db->find_comment( "alice", string( "test1" ) );
     BOOST_REQUIRE( test_comment == nullptr );
@@ -714,7 +704,7 @@ BOOST_AUTO_TEST_CASE( comment_delete_apply )
     tx.operations.push_back( comment );
     tx.set_expiration( db->head_block_time() + HIVE_MIN_TRANSACTION_EXPIRATION_LIMIT );
     sign( tx, alice_private_key );
-    db->push_transaction( tx, 0 );
+    push_transaction( tx, 0 );
 
     generate_blocks( HIVE_CASHOUT_WINDOW_SECONDS / HIVE_BLOCK_INTERVAL );
 
@@ -726,7 +716,7 @@ BOOST_AUTO_TEST_CASE( comment_delete_apply )
     tx.operations.push_back( op );
     tx.set_expiration( db->head_block_time() + HIVE_MIN_TRANSACTION_EXPIRATION_LIMIT );
     sign( tx, alice_private_key );
-    HIVE_REQUIRE_THROW( db->push_transaction( tx, 0 ), fc::assert_exception );
+    HIVE_REQUIRE_THROW( push_transaction( tx, 0 ), fc::assert_exception );
 
 
     BOOST_TEST_MESSAGE( "--- Test failure deleting a comment with a reply" );
@@ -738,7 +728,7 @@ BOOST_AUTO_TEST_CASE( comment_delete_apply )
     tx.operations.push_back( comment );
     tx.set_expiration( db->head_block_time() + HIVE_MIN_TRANSACTION_EXPIRATION_LIMIT );
     sign( tx, alice_private_key );
-    db->push_transaction( tx, 0 );
+    push_transaction( tx, 0 );
 
     generate_blocks( HIVE_MIN_ROOT_COMMENT_INTERVAL.to_seconds() / HIVE_BLOCK_INTERVAL );
     comment.permlink = "test3";
@@ -747,13 +737,13 @@ BOOST_AUTO_TEST_CASE( comment_delete_apply )
     tx.operations.push_back( comment );
     tx.set_expiration( db->head_block_time() + HIVE_MIN_TRANSACTION_EXPIRATION_LIMIT );
     sign( tx, alice_private_key );
-    db->push_transaction( tx, 0 );
+    push_transaction( tx, 0 );
 
     op.permlink = "test2";
     tx.clear();
     tx.operations.push_back( op );
     sign( tx, alice_private_key );
-    HIVE_REQUIRE_THROW( db->push_transaction( tx, 0 ), fc::assert_exception );
+    HIVE_REQUIRE_THROW( push_transaction( tx, 0 ), fc::assert_exception );
   }
   FC_LOG_AND_RETHROW()
 }
@@ -811,7 +801,7 @@ BOOST_AUTO_TEST_CASE( vote_apply )
       tx.operations.push_back( comment_op );
       tx.set_expiration( db->head_block_time() + HIVE_MAX_TIME_UNTIL_EXPIRATION );
       sign( tx, alice_private_key );
-      db->push_transaction( tx, 0 );
+      push_transaction( tx, 0 );
 
       BOOST_TEST_MESSAGE( "--- Testing voting on a non-existent comment" );
 
@@ -826,7 +816,7 @@ BOOST_AUTO_TEST_CASE( vote_apply )
       tx.operations.push_back( op );
       sign( tx, alice_private_key );
 
-      HIVE_REQUIRE_THROW( db->push_transaction( tx, 0 ), fc::exception );
+      HIVE_REQUIRE_THROW( push_transaction( tx, 0 ), fc::exception );
 
       validate_database();
 
@@ -838,7 +828,7 @@ BOOST_AUTO_TEST_CASE( vote_apply )
       tx.operations.push_back( op );
       sign( tx, alice_private_key );
 
-      HIVE_REQUIRE_THROW( db->push_transaction( tx, 0 ), fc::exception );
+      HIVE_REQUIRE_THROW( push_transaction( tx, 0 ), fc::exception );
 
       validate_database();
 
@@ -853,7 +843,7 @@ BOOST_AUTO_TEST_CASE( vote_apply )
       tx.operations.push_back( op );
       sign( tx, alice_private_key );
 
-      db->push_transaction( tx, 0 );
+      push_transaction( tx, 0 );
 
       auto& alice_comment = db->get_comment( "alice", string( "foo" ) );
       const comment_cashout_object* alice_comment_cashout = db->find_comment_cashout( alice_comment );
@@ -862,9 +852,9 @@ BOOST_AUTO_TEST_CASE( vote_apply )
       int64_t max_vote_denom = ( db->get_dynamic_global_properties().vote_power_reserve_rate * HIVE_VOTING_MANA_REGENERATION_SECONDS ) / (60*60*24);
 
       BOOST_REQUIRE( alice.last_vote_time == db->head_block_time() );
-      BOOST_REQUIRE( alice_comment_cashout->net_rshares.value == ( old_mana - alice.voting_manabar.current_mana ) - HIVE_VOTE_DUST_THRESHOLD );
-      BOOST_REQUIRE( alice_comment_cashout->cashout_time == alice_comment_cashout->get_creation_time() + HIVE_CASHOUT_WINDOW_SECONDS );
-      BOOST_REQUIRE( itr->rshares == ( old_mana - alice.voting_manabar.current_mana ) - HIVE_VOTE_DUST_THRESHOLD );
+      BOOST_REQUIRE( alice_comment_cashout->get_net_rshares() == ( old_mana - alice.voting_manabar.current_mana ) - HIVE_VOTE_DUST_THRESHOLD );
+      BOOST_REQUIRE( alice_comment_cashout->get_cashout_time() == alice_comment_cashout->get_creation_time() + HIVE_CASHOUT_WINDOW_SECONDS );
+      BOOST_REQUIRE( itr->get_rshares() == ( old_mana - alice.voting_manabar.current_mana ) - HIVE_VOTE_DUST_THRESHOLD );
       BOOST_REQUIRE( itr != vote_idx.end() );
       validate_database();
 
@@ -884,7 +874,7 @@ BOOST_AUTO_TEST_CASE( vote_apply )
       tx.signatures.clear();
       tx.operations.push_back( comment_op );
       sign( tx, bob_private_key );
-      db->push_transaction( tx, 0 );
+      push_transaction( tx, 0 );
 
       op.weight = HIVE_100_PERCENT / 2;
       op.voter = "alice";
@@ -894,21 +884,21 @@ BOOST_AUTO_TEST_CASE( vote_apply )
       tx.signatures.clear();
       tx.operations.push_back( op );
       sign( tx, alice_private_key );
-      db->push_transaction( tx, 0 );
+      push_transaction( tx, 0 );
 
       const auto& bob_comment = db->get_comment( "bob", string( "foo" ) );
       const comment_cashout_object* bob_comment_cashout = db->find_comment_cashout( bob_comment );
       itr = vote_idx.find( boost::make_tuple( bob_comment.get_id(), alice.get_id() ) );
 
-      BOOST_REQUIRE( bob_comment_cashout->net_rshares.value == ( old_manabar.current_mana - db->get_account( "alice" ).voting_manabar.current_mana ) - HIVE_VOTE_DUST_THRESHOLD );
-      BOOST_REQUIRE( bob_comment_cashout->cashout_time == bob_comment_cashout->get_creation_time() + HIVE_CASHOUT_WINDOW_SECONDS );
+      BOOST_REQUIRE( bob_comment_cashout->get_net_rshares() == ( old_manabar.current_mana - db->get_account( "alice" ).voting_manabar.current_mana ) - HIVE_VOTE_DUST_THRESHOLD );
+      BOOST_REQUIRE( bob_comment_cashout->get_cashout_time() == bob_comment_cashout->get_creation_time() + HIVE_CASHOUT_WINDOW_SECONDS );
       BOOST_REQUIRE( itr != vote_idx.end() );
       validate_database();
 
-      BOOST_TEST_MESSAGE( "--- Test payout time extension on vote" );
+      BOOST_TEST_MESSAGE( "--- Test payout time extension on vote" ); // such feature was scrapped with HF17
 
       old_mana = VOTING_MANABAR( "bob" ).current_mana;
-      auto old_abs_rshares = db->find_comment_cashout( db->get_comment( "alice", string( "foo" ) ) )->abs_rshares.value;
+      auto old_net_rshares = db->find_comment_cashout( db->get_comment( "alice", string( "foo" ) ) )->get_net_rshares();
 
       generate_blocks( db->head_block_time() + fc::seconds( ( HIVE_CASHOUT_WINDOW_SECONDS / 2 ) ), true );
 
@@ -925,12 +915,12 @@ BOOST_AUTO_TEST_CASE( vote_apply )
       tx.operations.push_back( op );
       tx.set_expiration( db->head_block_time() + HIVE_MAX_TIME_UNTIL_EXPIRATION );
       sign( tx, bob_private_key );
-      db->push_transaction( tx, 0 );
+      push_transaction( tx, 0 );
 
       itr = vote_idx.find( boost::make_tuple( new_alice_comment.get_id(), new_bob.get_id() ) );
 
-      BOOST_REQUIRE( new_alice_comment_cashout->net_rshares.value == old_abs_rshares + ( old_mana - new_bob.voting_manabar.current_mana ) - HIVE_VOTE_DUST_THRESHOLD );
-      BOOST_REQUIRE( new_alice_comment_cashout->cashout_time == new_alice_comment_cashout->get_creation_time() + HIVE_CASHOUT_WINDOW_SECONDS );
+      BOOST_REQUIRE( new_alice_comment_cashout->get_net_rshares() == old_net_rshares + ( old_mana - new_bob.voting_manabar.current_mana ) - HIVE_VOTE_DUST_THRESHOLD );
+      BOOST_REQUIRE( new_alice_comment_cashout->get_cashout_time() == new_alice_comment_cashout->get_creation_time() + HIVE_CASHOUT_WINDOW_SECONDS );
       BOOST_REQUIRE( itr != vote_idx.end() );
       validate_database();
 
@@ -940,7 +930,7 @@ BOOST_AUTO_TEST_CASE( vote_apply )
       const auto& new_bob_comment = db->get_comment( "bob", string( "foo" ) );
       const comment_cashout_object* new_bob_comment_cashout = db->find_comment_cashout( new_bob_comment );
 
-      old_abs_rshares = new_bob_comment_cashout->abs_rshares.value;
+      old_net_rshares = new_bob_comment_cashout->get_net_rshares();
 
       old_manabar = VOTING_MANABAR( "sam" );
       params.max_mana = util::get_effective_vesting_shares( db->get_account( "sam" ) );
@@ -954,7 +944,7 @@ BOOST_AUTO_TEST_CASE( vote_apply )
       tx.signatures.clear();
       tx.operations.push_back( op );
       sign( tx, sam_private_key );
-      db->push_transaction( tx, 0 );
+      push_transaction( tx, 0 );
 
       itr = vote_idx.find( boost::make_tuple( new_bob_comment.get_id(), new_sam.get_id() ) );
 
@@ -963,15 +953,13 @@ BOOST_AUTO_TEST_CASE( vote_apply )
       old_downvote_manabar.regenerate_mana( downvote_params, db->head_block_time() );
       int64_t sam_weight = old_downvote_manabar.current_mana - DOWNVOTE_MANABAR( "sam" ).current_mana - HIVE_VOTE_DUST_THRESHOLD;
 
-      BOOST_REQUIRE( new_bob_comment_cashout->net_rshares.value == old_abs_rshares - sam_weight );
-      BOOST_REQUIRE( new_bob_comment_cashout->abs_rshares.value == old_abs_rshares + sam_weight );
-      BOOST_REQUIRE( new_bob_comment_cashout->cashout_time == new_bob_comment_cashout->get_creation_time() + HIVE_CASHOUT_WINDOW_SECONDS );
+      BOOST_REQUIRE( new_bob_comment_cashout->get_net_rshares() == old_net_rshares - sam_weight );
+      BOOST_REQUIRE( new_bob_comment_cashout->get_cashout_time() == new_bob_comment_cashout->get_creation_time() + HIVE_CASHOUT_WINDOW_SECONDS );
       BOOST_REQUIRE( itr != vote_idx.end() );
       validate_database();
 
       BOOST_TEST_MESSAGE( "--- Test nested voting on nested comments" );
 
-      old_abs_rshares = new_alice_comment_cashout->children_abs_rshares.value;
       int64_t regenerated_power = (HIVE_100_PERCENT * ( db->head_block_time() - db->get_account( "alice").last_vote_time ).to_seconds() ) / HIVE_VOTING_MANA_REGENERATION_SECONDS;
       int64_t used_power = ( get_voting_power( db->get_account( "alice" ) ) + regenerated_power + max_vote_denom - 1 ) / max_vote_denom;
 
@@ -985,7 +973,7 @@ BOOST_AUTO_TEST_CASE( vote_apply )
       tx.signatures.clear();
       tx.operations.push_back( comment_op );
       sign( tx, sam_private_key );
-      db->push_transaction( tx, 0 );
+      push_transaction( tx, 0 );
 
       op.weight = HIVE_100_PERCENT;
       op.voter = "alice";
@@ -995,13 +983,13 @@ BOOST_AUTO_TEST_CASE( vote_apply )
       tx.signatures.clear();
       tx.operations.push_back( op );
       sign( tx, alice_private_key );
-      db->push_transaction( tx, 0 );
+      push_transaction( tx, 0 );
 
       int64_t new_rshares = ( ( fc::uint128_t( get_vesting( "alice" ).amount.value ) * used_power ) / HIVE_100_PERCENT ).to_uint64() - HIVE_VOTE_DUST_THRESHOLD;
 
       {
         auto* alice_cashout = db->find_comment_cashout( db->get_comment( "alice", string( "foo" ) ) );
-        BOOST_REQUIRE( alice_cashout->cashout_time == alice_cashout->get_creation_time() + HIVE_CASHOUT_WINDOW_SECONDS );
+        BOOST_REQUIRE( alice_cashout->get_cashout_time() == alice_cashout->get_creation_time() + HIVE_CASHOUT_WINDOW_SECONDS );
       }
 
       validate_database();
@@ -1012,9 +1000,8 @@ BOOST_AUTO_TEST_CASE( vote_apply )
 
       auto& new_alice = db->get_account( "alice" );
       auto alice_bob_vote = vote_idx.find( boost::make_tuple( new_bob_comment.get_id(), new_alice.get_id() ) );
-      auto old_vote_rshares = alice_bob_vote->rshares;
-      auto old_net_rshares = new_bob_comment_cashout->net_rshares.value;
-      old_abs_rshares = new_bob_comment_cashout->abs_rshares.value;
+      auto old_vote_rshares = alice_bob_vote->get_rshares();
+      old_net_rshares = new_bob_comment_cashout->get_net_rshares();
       used_power = ( ( HIVE_1_PERCENT * 25 * ( get_voting_power( new_alice ) ) / HIVE_100_PERCENT ) + max_vote_denom - 1 ) / max_vote_denom;
       auto alice_voting_power = get_voting_power( new_alice ) - used_power;
 
@@ -1030,17 +1017,16 @@ BOOST_AUTO_TEST_CASE( vote_apply )
       tx.signatures.clear();
       tx.operations.push_back( op );
       sign( tx, alice_private_key );
-      db->push_transaction( tx, 0 );
+      push_transaction( tx, 0 );
       alice_bob_vote = vote_idx.find( boost::make_tuple( new_bob_comment.get_id(), new_alice.get_id() ) );
 
       new_rshares = old_manabar.current_mana - VOTING_MANABAR( "alice" ).current_mana - HIVE_VOTE_DUST_THRESHOLD;
 
-      BOOST_REQUIRE( new_bob_comment_cashout->net_rshares == old_net_rshares - old_vote_rshares + new_rshares );
-      BOOST_REQUIRE( new_bob_comment_cashout->abs_rshares == old_abs_rshares + new_rshares );
-      BOOST_REQUIRE( new_bob_comment_cashout->cashout_time == new_bob_comment_cashout->get_creation_time() + HIVE_CASHOUT_WINDOW_SECONDS );
-      BOOST_REQUIRE( alice_bob_vote->rshares == new_rshares );
-      BOOST_REQUIRE( alice_bob_vote->last_update == db->head_block_time() );
-      BOOST_REQUIRE( alice_bob_vote->vote_percent == op.weight );
+      BOOST_REQUIRE( new_bob_comment_cashout->get_net_rshares() == old_net_rshares - old_vote_rshares + new_rshares );
+      BOOST_REQUIRE( new_bob_comment_cashout->get_cashout_time() == new_bob_comment_cashout->get_creation_time() + HIVE_CASHOUT_WINDOW_SECONDS );
+      BOOST_REQUIRE( alice_bob_vote->get_rshares() == new_rshares );
+      BOOST_REQUIRE( alice_bob_vote->get_last_update() == db->head_block_time() );
+      BOOST_REQUIRE( alice_bob_vote->get_vote_percent() == op.weight );
       validate_database();
 
       BOOST_TEST_MESSAGE( "--- Test decreasing vote rshares" );
@@ -1048,8 +1034,7 @@ BOOST_AUTO_TEST_CASE( vote_apply )
       generate_blocks( db->head_block_time() + HIVE_MIN_VOTE_INTERVAL_SEC );
 
       old_vote_rshares = new_rshares;
-      old_net_rshares = new_bob_comment_cashout->net_rshares.value;
-      old_abs_rshares = new_bob_comment_cashout->abs_rshares.value;
+      old_net_rshares = new_bob_comment_cashout->get_net_rshares();
       used_power = ( uint64_t( HIVE_1_PERCENT ) * 75 * uint64_t( alice_voting_power ) ) / HIVE_100_PERCENT;
       used_power = ( used_power + max_vote_denom - 1 ) / max_vote_denom;
       alice_voting_power -= used_power;
@@ -1067,41 +1052,38 @@ BOOST_AUTO_TEST_CASE( vote_apply )
       tx.signatures.clear();
       tx.operations.push_back( op );
       sign( tx, alice_private_key );
-      db->push_transaction( tx, 0 );
+      push_transaction( tx, 0 );
       alice_bob_vote = vote_idx.find( boost::make_tuple( new_bob_comment.get_id(), new_alice.get_id() ) );
 
       new_rshares = old_downvote_manabar.current_mana - DOWNVOTE_MANABAR( "alice" ).current_mana - HIVE_VOTE_DUST_THRESHOLD;
 
-      BOOST_REQUIRE( new_bob_comment_cashout->net_rshares == old_net_rshares - old_vote_rshares - new_rshares );
-      BOOST_REQUIRE( new_bob_comment_cashout->abs_rshares == old_abs_rshares + new_rshares );
-      BOOST_REQUIRE( new_bob_comment_cashout->cashout_time == new_bob_comment_cashout->get_creation_time() + HIVE_CASHOUT_WINDOW_SECONDS );
-      BOOST_REQUIRE( alice_bob_vote->rshares == -1 * new_rshares );
-      BOOST_REQUIRE( alice_bob_vote->last_update == db->head_block_time() );
-      BOOST_REQUIRE( alice_bob_vote->vote_percent == op.weight );
+      BOOST_REQUIRE( new_bob_comment_cashout->get_net_rshares() == old_net_rshares - old_vote_rshares - new_rshares );
+      BOOST_REQUIRE( new_bob_comment_cashout->get_cashout_time() == new_bob_comment_cashout->get_creation_time() + HIVE_CASHOUT_WINDOW_SECONDS );
+      BOOST_REQUIRE( alice_bob_vote->get_rshares() == -1 * new_rshares );
+      BOOST_REQUIRE( alice_bob_vote->get_last_update() == db->head_block_time() );
+      BOOST_REQUIRE( alice_bob_vote->get_vote_percent() == op.weight );
       validate_database();
 
       BOOST_TEST_MESSAGE( "--- Test changing a vote to 0 weight (aka: removing a vote)" );
 
       generate_blocks( db->head_block_time() + HIVE_MIN_VOTE_INTERVAL_SEC );
 
-      old_vote_rshares = alice_bob_vote->rshares;
-      old_net_rshares = new_bob_comment_cashout->net_rshares.value;
-      old_abs_rshares = new_bob_comment_cashout->abs_rshares.value;
+      old_vote_rshares = alice_bob_vote->get_rshares();
+      old_net_rshares = new_bob_comment_cashout->get_net_rshares();
 
       op.weight = 0;
       tx.operations.clear();
       tx.signatures.clear();
       tx.operations.push_back( op );
       sign( tx, alice_private_key );
-      db->push_transaction( tx, 0 );
+      push_transaction( tx, 0 );
       alice_bob_vote = vote_idx.find( boost::make_tuple( new_bob_comment.get_id(), new_alice.get_id() ) );
 
-      BOOST_REQUIRE( new_bob_comment_cashout->net_rshares == old_net_rshares - old_vote_rshares );
-      BOOST_REQUIRE( new_bob_comment_cashout->abs_rshares == old_abs_rshares );
-      BOOST_REQUIRE( new_bob_comment_cashout->cashout_time == new_bob_comment_cashout->get_creation_time() + HIVE_CASHOUT_WINDOW_SECONDS );
-      BOOST_REQUIRE( alice_bob_vote->rshares == 0 );
-      BOOST_REQUIRE( alice_bob_vote->last_update == db->head_block_time() );
-      BOOST_REQUIRE( alice_bob_vote->vote_percent == op.weight );
+      BOOST_REQUIRE( new_bob_comment_cashout->get_net_rshares() == old_net_rshares - old_vote_rshares );
+      BOOST_REQUIRE( new_bob_comment_cashout->get_cashout_time() == new_bob_comment_cashout->get_creation_time() + HIVE_CASHOUT_WINDOW_SECONDS );
+      BOOST_REQUIRE( alice_bob_vote->get_rshares() == 0 );
+      BOOST_REQUIRE( alice_bob_vote->get_last_update() == db->head_block_time() );
+      BOOST_REQUIRE( alice_bob_vote->get_vote_percent() == op.weight );
       validate_database();
 
       BOOST_TEST_MESSAGE( "--- Test downvote overlap when downvote mana is low" );
@@ -1133,8 +1115,7 @@ BOOST_AUTO_TEST_CASE( vote_apply )
         const auto& bob_comment = db->get_comment( "bob", string( "foo" ) );
         const comment_cashout_object* bob_comment_cashout = db->find_comment_cashout( bob_comment );
 
-        old_net_rshares = bob_comment_cashout->net_rshares.value;
-        old_abs_rshares = bob_comment_cashout->abs_rshares.value;
+        old_net_rshares = bob_comment_cashout->get_net_rshares();
       }
 
       op.weight = -1 * HIVE_100_PERCENT;
@@ -1142,18 +1123,17 @@ BOOST_AUTO_TEST_CASE( vote_apply )
       tx.signatures.clear();
       tx.operations.push_back( op );
       sign( tx, alice_private_key );
-      db->push_transaction( tx, 0 );
+      push_transaction( tx, 0 );
       alice_bob_vote = vote_idx.find( boost::make_tuple( new_bob_comment.get_id(), new_alice.get_id() ) );
 
       {
         const auto& bob_comment = db->get_comment( "bob", string( "foo" ) );
         const comment_cashout_object* bob_comment_cashout = db->find_comment_cashout( bob_comment );
         const auto& alice = db->get_account( "alice" );
-        BOOST_REQUIRE( bob_comment_cashout->net_rshares == old_net_rshares - alice_weight + HIVE_VOTE_DUST_THRESHOLD );
-        BOOST_REQUIRE( bob_comment_cashout->abs_rshares == old_abs_rshares + alice_weight - HIVE_VOTE_DUST_THRESHOLD );
-        BOOST_REQUIRE( alice_bob_vote->rshares == -1 * ( alice_weight - HIVE_VOTE_DUST_THRESHOLD ) );
-        BOOST_REQUIRE( alice_bob_vote->last_update == db->head_block_time() );
-        BOOST_REQUIRE( alice_bob_vote->vote_percent == op.weight );
+        BOOST_REQUIRE( bob_comment_cashout->get_net_rshares() == old_net_rshares - alice_weight + HIVE_VOTE_DUST_THRESHOLD );
+        BOOST_REQUIRE( alice_bob_vote->get_rshares() == -1 * ( alice_weight - HIVE_VOTE_DUST_THRESHOLD ) );
+        BOOST_REQUIRE( alice_bob_vote->get_last_update() == db->head_block_time() );
+        BOOST_REQUIRE( alice_bob_vote->get_vote_percent() == op.weight );
         BOOST_REQUIRE( alice.downvote_manabar.current_mana == 0 );
         BOOST_REQUIRE( alice.voting_manabar.current_mana == old_manabar.current_mana - alice_weight + old_downvote_manabar.current_mana );
         validate_database();
@@ -1161,7 +1141,7 @@ BOOST_AUTO_TEST_CASE( vote_apply )
 
       BOOST_TEST_MESSAGE( "--- Test reduced effectiveness when increasing rshares within lockout period" );
 
-      generate_blocks( fc::time_point_sec( ( new_bob_comment_cashout->cashout_time - HIVE_UPVOTE_LOCKOUT_HF17 ).sec_since_epoch() + HIVE_BLOCK_INTERVAL ), true );
+      generate_blocks( fc::time_point_sec( ( new_bob_comment_cashout->get_cashout_time() - HIVE_UPVOTE_LOCKOUT_HF17 ).sec_since_epoch() + HIVE_BLOCK_INTERVAL ), true );
 
       old_manabar = VOTING_MANABAR( "dave" );
       params.max_mana = util::get_effective_vesting_shares( db->get_account( "dave" ) );
@@ -1173,7 +1153,7 @@ BOOST_AUTO_TEST_CASE( vote_apply )
       tx.signatures.clear();
       tx.operations.push_back( op );
       sign( tx, dave_private_key );
-      db->push_transaction( tx, 0 );
+      push_transaction( tx, 0 );
 
       new_rshares = old_manabar.current_mana - VOTING_MANABAR( "dave" ).current_mana - HIVE_VOTE_DUST_THRESHOLD;
       new_rshares = ( new_rshares * ( HIVE_UPVOTE_LOCKOUT_SECONDS - HIVE_BLOCK_INTERVAL ) ) / HIVE_UPVOTE_LOCKOUT_SECONDS;
@@ -1182,7 +1162,7 @@ BOOST_AUTO_TEST_CASE( vote_apply )
 
       {
         auto& dave_bob_vote = db->get< comment_vote_object, by_comment_voter >( boost::make_tuple( bob_comment_id, dave_id ) );
-        BOOST_REQUIRE_EQUAL( dave_bob_vote.rshares, new_rshares );
+        BOOST_REQUIRE_EQUAL( dave_bob_vote.get_rshares(), new_rshares );
       }
       validate_database();
 
@@ -1203,18 +1183,263 @@ BOOST_AUTO_TEST_CASE( vote_apply )
       tx.signatures.clear();
       tx.operations.push_back( op );
       sign( tx, dave_private_key );
-      db->push_transaction( tx, 0 );
+      push_transaction( tx, 0 );
 
       new_rshares = old_manabar.current_mana - VOTING_MANABAR( "dave" ).current_mana - HIVE_VOTE_DUST_THRESHOLD;
       new_rshares = ( new_rshares * ( HIVE_UPVOTE_LOCKOUT_SECONDS - HIVE_BLOCK_INTERVAL - HIVE_BLOCK_INTERVAL ) ) / HIVE_UPVOTE_LOCKOUT_SECONDS;
 
       {
         auto& dave_bob_vote = db->get< comment_vote_object, by_comment_voter >( boost::make_tuple( bob_comment_id, dave_id ) );
-        BOOST_REQUIRE_EQUAL( dave_bob_vote.rshares, new_rshares );
+        BOOST_REQUIRE_EQUAL( dave_bob_vote.get_rshares(), new_rshares );
       }
       validate_database();
       */
     }
+  }
+  FC_LOG_AND_RETHROW()
+}
+
+BOOST_AUTO_TEST_CASE( vote_weights )
+{
+  try
+  {
+    BOOST_TEST_MESSAGE( "Testing: vote_weights" );
+
+    // test one vote with the same power per one comment in each of possible vote windows:
+    // - right with comment itself => this is not tested because since HF25 there is no "reverse_auction_seconds penalty"
+    //   for early voting and it would not be possible to have exactly the same vote power after such vote edit
+    //   because mana would not have time to regenerate between vote and revote
+    // - [0 .. early_voting_seconds)
+    // - [early_voting_seconds .. early_voting_seconds+mid_voting_seconds)
+    // - [early_voting_seconds+mid_voting_seconds .. cashout-HIVE_UPVOTE_LOCKOUT_SECONDS)
+    // - [cashout-HIVE_UPVOTE_LOCKOUT_SECONDS .. cashout)
+
+    ACTORS(
+      ( author0 ) ( voter0 ) ( author1 ) ( voter1 ) ( author2 ) ( voter2 ) ( author3 ) ( voter3 ) //pattern upvoters
+      ( author4 ) ( voter4 ) ( author5 ) ( voter5 ) ( author6 ) ( voter6 ) ( author7 ) ( voter7 ) //pattern downvoters
+      ( author01 ) ( voter01 ) ( author11 ) ( voter11 ) ( author21 ) ( voter21 ) ( author31 ) ( voter31 ) //upvote from small to pattern
+      ( author41 ) ( voter41 ) ( author51 ) ( voter51 ) ( author61 ) ( voter61 ) ( author71 ) ( voter71 ) //downvote from small to pattern
+      ( author02 ) ( voter02 ) ( author12 ) ( voter12 ) ( author22 ) ( voter22 ) ( author32 ) ( voter32 ) //upvote from big to pattern
+      ( author42 ) ( voter42 ) ( author52 ) ( voter52 ) ( author62 ) ( voter62 ) ( author72 ) ( voter72 ) //downvote from big to pattern
+      ( author03 ) ( voter03 ) ( author13 ) ( voter13 ) ( author23 ) ( voter23 ) ( author33 ) ( voter33 ) //upvote from big downvote to pattern
+      ( author43 ) ( voter43 ) ( author53 ) ( voter53 ) ( author63 ) ( voter63 ) ( author73 ) ( voter73 ) //downvote from big upvote to pattern
+      ( author04 ) ( voter04 ) ( author14 ) ( voter14 ) ( author24 ) ( voter24 ) ( author34 ) ( voter34 ) //upvote from big downvote to zero
+      ( author44 ) ( voter44 ) ( author54 ) ( voter54 ) ( author64 ) ( voter64 ) ( author74 ) ( voter74 ) //downvote from big upvote to zero
+    )
+    generate_block();
+
+    // values must be small enough so mana has time to regenerate after initial vote before first edit
+    const int16_t PAT_UPVOTE_PERCENT = 3 * HIVE_1_PERCENT; // 3%
+    const int16_t PAT_DOWNVOTE_PERCENT = -3 * HIVE_1_PERCENT; // -3%
+    const int16_t SMALL_UPVOTE_PERCENT = 1 * HIVE_1_PERCENT; // 1%
+    const int16_t SMALL_DOWNVOTE_PERCENT = -1 * HIVE_1_PERCENT; // -1%
+    const int16_t BIG_UPVOTE_PERCENT = 5 * HIVE_1_PERCENT; // 5%
+    const int16_t BIG_DOWNVOTE_PERCENT = -5 * HIVE_1_PERCENT; // -5%
+
+    struct TActor
+    {
+      const char* name;
+      fc::ecc::private_key key;
+    };
+    TActor voters[] = {
+      {"voter0",voter0_private_key}, {"voter1",voter1_private_key}, {"voter2",voter2_private_key}, {"voter3",voter3_private_key},
+      {"voter4",voter4_private_key}, {"voter5",voter5_private_key}, {"voter6",voter6_private_key}, {"voter7",voter7_private_key},
+      {"voter01",voter01_private_key}, {"voter11",voter11_private_key}, {"voter21",voter21_private_key}, {"voter31",voter31_private_key},
+      {"voter41",voter41_private_key}, {"voter51",voter51_private_key}, {"voter61",voter61_private_key}, {"voter71",voter71_private_key},
+      {"voter02",voter02_private_key}, {"voter12",voter12_private_key}, {"voter22",voter22_private_key}, {"voter32",voter32_private_key},
+      {"voter42",voter42_private_key}, {"voter52",voter52_private_key}, {"voter62",voter62_private_key}, {"voter72",voter72_private_key},
+      {"voter03",voter03_private_key}, {"voter13",voter13_private_key}, {"voter23",voter23_private_key}, {"voter33",voter33_private_key},
+      {"voter43",voter43_private_key}, {"voter53",voter53_private_key}, {"voter63",voter63_private_key}, {"voter73",voter73_private_key},
+      {"voter04",voter04_private_key}, {"voter14",voter14_private_key}, {"voter24",voter24_private_key}, {"voter34",voter34_private_key},
+      {"voter44",voter44_private_key}, {"voter54",voter54_private_key}, {"voter64",voter64_private_key}, {"voter74",voter74_private_key}
+    };
+    TActor authors[] = {
+      {"author0",author0_private_key}, {"author1",author1_private_key}, {"author2",author2_private_key}, {"author3",author3_private_key},
+      {"author4",author4_private_key}, {"author5",author5_private_key}, {"author6",author6_private_key}, {"author7",author7_private_key},
+      {"author01",author01_private_key}, {"author11",author11_private_key}, {"author21",author21_private_key}, {"author31",author31_private_key},
+      {"author41",author41_private_key}, {"author51",author51_private_key}, {"author61",author61_private_key}, {"author71",author71_private_key},
+      {"author02",author02_private_key}, {"author12",author12_private_key}, {"author22",author22_private_key}, {"author32",author32_private_key},
+      {"author42",author42_private_key}, {"author52",author52_private_key}, {"author62",author62_private_key}, {"author72",author72_private_key},
+      {"author03",author03_private_key}, {"author13",author13_private_key}, {"author23",author23_private_key}, {"author33",author33_private_key},
+      {"author43",author43_private_key}, {"author53",author53_private_key}, {"author63",author63_private_key}, {"author73",author73_private_key},
+      {"author04",author04_private_key}, {"author14",author14_private_key}, {"author24",author24_private_key}, {"author34",author34_private_key},
+      {"author44",author44_private_key}, {"author54",author54_private_key}, {"author64",author64_private_key}, {"author74",author74_private_key}
+    };
+
+    for( auto& voter : voters )
+      vest( HIVE_INIT_MINER_NAME, voter.name, ASSET( "1000.000 TESTS" ) );
+    generate_block();
+
+    comment_operation comment_op;
+    comment_op.permlink = "permlink";
+    comment_op.parent_permlink = "test";
+    comment_op.title = "test";
+    comment_op.body = "text";
+    for( auto& author : authors )
+    {
+      comment_op.author = author.name;
+      push_transaction( comment_op, author.key );
+    }
+
+    vote_operation vote_op;
+    vote_op.permlink = "permlink";
+    int i;
+    const auto& VOTE = [&]( int i )
+    {
+      vote_op.voter = voters[i].name;
+      vote_op.author = authors[i].name;
+      push_transaction( vote_op, voters[i].key );
+    };
+    vote_op.weight = SMALL_UPVOTE_PERCENT; //initial small upvote
+    for( i = 8; i < 12; ++i )
+      VOTE( i );
+    vote_op.weight = SMALL_DOWNVOTE_PERCENT; //initial small downvote
+    for( i = 12; i < 16; ++i )
+      VOTE( i );
+    vote_op.weight = BIG_UPVOTE_PERCENT; //initial big upvote
+    for( i = 16; i < 20; ++i )
+      VOTE( i );
+    vote_op.weight = BIG_DOWNVOTE_PERCENT; //initial big downvote
+    for( i = 20; i < 24; ++i )
+      VOTE( i );
+    vote_op.weight = BIG_DOWNVOTE_PERCENT; //initial big downvote
+    for( i = 24; i < 28; ++i )
+      VOTE( i );
+    vote_op.weight = BIG_UPVOTE_PERCENT; //initial big upvote
+    for( i = 28; i < 32; ++i )
+      VOTE( i );
+    vote_op.weight = BIG_DOWNVOTE_PERCENT; //initial big downvote
+    for( i = 32; i < 36; ++i )
+      VOTE( i );
+    vote_op.weight = BIG_UPVOTE_PERCENT; //initial big upvote
+    for( i = 36; i < 40; ++i )
+      VOTE( i );
+    static_assert( sizeof( voters ) == 40 * sizeof( TActor ) );
+
+    generate_block();
+
+    const auto& dgpo = db->get_dynamic_global_properties();
+    fc::time_point_sec creation_time, cashout_time;
+    {
+      const auto& comment = db->get_comment( "author0", string( "permlink" ) );
+      const auto* cashout = db->find_comment_cashout( comment );
+      creation_time = cashout->get_creation_time();
+      cashout_time = cashout->get_cashout_time();
+    }
+
+    //votes in early window
+    generate_blocks( creation_time + fc::seconds( dgpo.early_voting_seconds - 6 ), false );
+    vote_op.weight = PAT_UPVOTE_PERCENT; //pattern vote and vote edits into pattern upvote
+    for( auto i : { 0,8,16,24 } )
+      VOTE( i );
+    vote_op.weight = 0; //vote deleted
+    VOTE( 32 );
+    vote_op.weight = PAT_DOWNVOTE_PERCENT; //pattern vote and vote edits into pattern downvote
+    for( auto i : { 4,12,20,28 } )
+      VOTE( i );
+    vote_op.weight = 0; //vote deleted
+    VOTE( 36 );
+    generate_block();
+
+    //votes in mid window
+    generate_blocks( creation_time + fc::seconds( dgpo.early_voting_seconds + dgpo.mid_voting_seconds / 2 ), false );
+    vote_op.weight = PAT_UPVOTE_PERCENT; //pattern vote and edits into pattern upvote
+    for( auto i : { 1,9,17,25 } )
+      VOTE( i );
+    vote_op.weight = 0; //vote deleted
+    VOTE( 33 );
+    vote_op.weight = PAT_DOWNVOTE_PERCENT; //pattern vote and vote edits into pattern downvote
+    for( auto i : { 5,13,21,29 } )
+      VOTE( i );
+    vote_op.weight = 0; //vote deleted
+    VOTE( 37 );
+    generate_block();
+
+    //votes in late window
+    generate_blocks( cashout_time - fc::seconds( HIVE_UPVOTE_LOCKOUT_SECONDS + 6 ), false );
+    vote_op.weight = PAT_UPVOTE_PERCENT; //pattern vote and vote edits into pattern upvote
+    for( auto i : { 2,10,18,26 } )
+      VOTE( i );
+    vote_op.weight = 0; //vote deleted
+    VOTE( 34 );
+    vote_op.weight = PAT_DOWNVOTE_PERCENT; //pattern vote and vote edits into pattern downvote
+    for( auto i : { 6,14,22,30 } )
+      VOTE( i );
+    vote_op.weight = 0; //vote deleted
+    VOTE( 38 );
+    generate_block();
+
+    //votes in upvote lockout (that is also within late window)
+    generate_blocks( cashout_time - fc::seconds( HIVE_UPVOTE_LOCKOUT_SECONDS / 2 ), false );
+    vote_op.weight = PAT_UPVOTE_PERCENT; //pattern vote and vote edits into pattern upvote
+    for( auto i : { 3,11,19,27 } )
+      VOTE( i );
+    vote_op.weight = 0; //vote deleted
+    VOTE( 35 );
+    vote_op.weight = PAT_DOWNVOTE_PERCENT; //pattern vote and vote edits into pattern downvote
+    for( auto i : { 7,15,23,31 } )
+      VOTE( i );
+    vote_op.weight = 0; //vote deleted
+    VOTE( 39 );
+    generate_block();
+
+    const auto& vote_idx = db->get_index< comment_vote_index, by_comment_voter >();
+    std::vector<const hive::chain::comment_object*> commentObjs;
+    std::vector<const hive::chain::account_object*> voterObjs;
+    std::vector<const hive::chain::comment_vote_object*> voteObjs;
+    for( i = 0; i < 40; ++i )
+    {
+      const auto& comment = db->get_comment( authors[i].name, string( "permlink" ) );
+      commentObjs.emplace_back( &comment );
+      const auto& cashout = *( db->find_comment_cashout( comment ) );
+      const auto& voter = db->get_account( voters[i].name );
+      voterObjs.emplace_back( &voter );
+      const auto& vote = *( vote_idx.find( boost::make_tuple( comment.get_id(), voter.get_id() ) ) );
+      voteObjs.emplace_back( &vote );
+      BOOST_REQUIRE_EQUAL( vote.get_weight(), cashout.get_total_vote_weight() );
+    }
+
+    for( auto i : { 8,16,24 } ) //upvotes edited in early window are the same as early window pattern
+      BOOST_REQUIRE_EQUAL( voteObjs[i]->get_weight(), voteObjs[0]->get_weight() );
+    for( auto i : { 12,20,28 } ) //downvotes edited in early window are the same as early window pattern
+      BOOST_REQUIRE_EQUAL( voteObjs[i]->get_weight(), voteObjs[4]->get_weight() );
+    for( auto i : { 9,17,25 } ) //upvotes edited in mid window are the same as mid window pattern
+      BOOST_REQUIRE_EQUAL( voteObjs[i]->get_weight(), voteObjs[1]->get_weight() );
+    for( auto i : { 13,21,29 } ) //downvotes edited in mid window are the same as mid window pattern
+      BOOST_REQUIRE_EQUAL( voteObjs[i]->get_weight(), voteObjs[5]->get_weight() );
+    for( auto i : { 10,18,26 } ) //upvotes edited in late window are the same as late window pattern
+      BOOST_REQUIRE_EQUAL( voteObjs[i]->get_weight(), voteObjs[2]->get_weight() );
+    for( auto i : { 14,22,30 } ) //downvotes edited in late window are the same as late window pattern
+      BOOST_REQUIRE_EQUAL( voteObjs[i]->get_weight(), voteObjs[6]->get_weight() );
+    for( auto i : { 11,19,27 } ) //upvotes edited in lockout window are the same as lockout window pattern (only because the same block)
+      BOOST_REQUIRE_EQUAL( voteObjs[i]->get_weight(), voteObjs[3]->get_weight() );
+    for( auto i : { 15,23,31 } ) //downvotes edited in lockout window are the same as lockout window pattern (only because the same block)
+      BOOST_REQUIRE_EQUAL( voteObjs[i]->get_weight(), voteObjs[7]->get_weight() );
+    for( i = 32; i < 40; ++i ) //deleted votes have zero weight
+      BOOST_REQUIRE_EQUAL( voteObjs[i]->get_weight(), 0 );
+    
+    generate_blocks( cashout_time, false );
+
+    for( auto i : { 8,16,24 } ) //upvotes edited in early window have the same rewards as early window pattern
+      BOOST_REQUIRE_EQUAL( voterObjs[i]->get_vest_rewards().amount.value, voterObjs[0]->get_vest_rewards().amount.value );
+    for( auto i : { 4,12,20,28 } ) //downvotes have no rewards
+      BOOST_REQUIRE_EQUAL( voterObjs[i]->get_vest_rewards().amount.value, 0 );
+    for( auto i : { 9,17,25 } ) //upvotes edited in mid window have the same rewards as mid window pattern
+      BOOST_REQUIRE_EQUAL( voterObjs[i]->get_vest_rewards().amount.value, voterObjs[1]->get_vest_rewards().amount.value );
+    for( auto i : { 5,13,21,29 } ) //downvotes have no rewards
+      BOOST_REQUIRE_EQUAL( voterObjs[i]->get_vest_rewards().amount.value, 0 );
+    for( auto i : { 10,18,26 } ) //upvotes edited in late window have the same rewards as late window pattern
+      BOOST_REQUIRE_EQUAL( voterObjs[i]->get_vest_rewards().amount.value, voterObjs[2]->get_vest_rewards().amount.value );
+    for( auto i : { 6,14,22,30 } ) //downvotes have no rewards
+      BOOST_REQUIRE_EQUAL( voterObjs[i]->get_vest_rewards().amount.value, 0 );
+    for( auto i : { 11,19,27 } ) //upvotes edited in lockout window have the same rewards as lockout window pattern (only because the same block)
+      BOOST_REQUIRE_EQUAL( voterObjs[i]->get_vest_rewards().amount.value, voterObjs[3]->get_vest_rewards().amount.value );
+    for( auto i : { 7,15,23,31 } ) //downvotes have no rewards
+      BOOST_REQUIRE_EQUAL( voterObjs[i]->get_vest_rewards().amount.value, 0 );
+    for( i = 32; i < 40; ++i ) //deleted votes have no rewards
+      BOOST_REQUIRE_EQUAL( voterObjs[i]->get_vest_rewards().amount.value, 0 );
+
+    validate_database();
   }
   FC_LOG_AND_RETHROW()
 }
@@ -1284,28 +1509,28 @@ BOOST_AUTO_TEST_CASE( transfer_authorities )
     tx.operations.push_back( op );
 
     BOOST_TEST_MESSAGE( "--- Test failure when no signatures" );
-    HIVE_REQUIRE_THROW( db->push_transaction( tx, 0 ), tx_missing_active_auth );
+    HIVE_REQUIRE_THROW( push_transaction( tx, 0 ), tx_missing_active_auth );
 
     BOOST_TEST_MESSAGE( "--- Test failure when signed by a signature not in the account's authority" );
     sign( tx, alice_post_key );
-    HIVE_REQUIRE_THROW( db->push_transaction( tx, 0 ), tx_missing_active_auth );
+    HIVE_REQUIRE_THROW( push_transaction( tx, 0 ), tx_missing_active_auth );
 
     BOOST_TEST_MESSAGE( "--- Test failure when duplicate signatures" );
     tx.signatures.clear();
     sign( tx, alice_private_key );
     sign( tx, alice_private_key );
-    HIVE_REQUIRE_THROW( db->push_transaction( tx, 0 ), tx_duplicate_sig );
+    HIVE_REQUIRE_THROW( push_transaction( tx, 0 ), tx_duplicate_sig );
 
     BOOST_TEST_MESSAGE( "--- Test failure when signed by an additional signature not in the creator's authority" );
     tx.signatures.clear();
     sign( tx, alice_private_key );
     sign( tx, bob_private_key );
-    HIVE_REQUIRE_THROW( db->push_transaction( tx, 0 ), tx_irrelevant_sig );
+    HIVE_REQUIRE_THROW( push_transaction( tx, 0 ), tx_irrelevant_sig );
 
     BOOST_TEST_MESSAGE( "--- Test success with witness signature" );
     tx.signatures.clear();
     sign( tx, alice_private_key );
-    db->push_transaction( tx, 0 );
+    push_transaction( tx, 0 );
 
     validate_database();
   }
@@ -1332,7 +1557,7 @@ BOOST_AUTO_TEST_CASE( signature_stripping )
     tx.operations.push_back( update_op );
 
     sign( tx, corp_private_key );
-    db->push_transaction( tx, 0 );
+    push_transaction( tx, 0 );
 
     tx.operations.clear();
     tx.signatures.clear();
@@ -1346,22 +1571,22 @@ BOOST_AUTO_TEST_CASE( signature_stripping )
 
     sign( tx, alice_private_key );
     signature_type alice_sig = tx.signatures.back();
-    HIVE_REQUIRE_THROW( db->push_transaction( tx, 0 ), tx_missing_active_auth );
+    HIVE_REQUIRE_THROW( push_transaction( tx, 0 ), tx_missing_active_auth );
     sign( tx, bob_private_key );
     signature_type bob_sig = tx.signatures.back();
     sign( tx, sam_private_key );
     signature_type sam_sig = tx.signatures.back();
-    HIVE_REQUIRE_THROW( db->push_transaction( tx, 0 ), tx_irrelevant_sig );
+    HIVE_REQUIRE_THROW( push_transaction( tx, 0 ), tx_irrelevant_sig );
 
     tx.signatures.clear();
     tx.signatures.push_back( alice_sig );
     tx.signatures.push_back( bob_sig );
-    db->push_transaction( tx, 0 );
+    push_transaction( tx, 0 );
 
     tx.signatures.clear();
     tx.signatures.push_back( alice_sig );
     tx.signatures.push_back( sam_sig );
-    HIVE_REQUIRE_THROW( db->push_transaction( tx, 0 ), fc::exception );
+    HIVE_REQUIRE_THROW( push_transaction( tx, 0 ), fc::exception );
   }
   FC_LOG_AND_RETHROW()
 }
@@ -1391,7 +1616,7 @@ BOOST_AUTO_TEST_CASE( transfer_apply )
     tx.operations.push_back( op );
     tx.set_expiration( db->head_block_time() + HIVE_MAX_TIME_UNTIL_EXPIRATION );
     sign( tx, alice_private_key );
-    db->push_transaction( tx, 0 );
+    push_transaction( tx, 0 );
 
     BOOST_REQUIRE( get_balance( "alice" ).amount.value == ASSET( "5.000 TESTS" ).amount.value );
     BOOST_REQUIRE( get_balance( "bob" ).amount.value == ASSET( "5.000 TESTS" ).amount.value );
@@ -1413,7 +1638,7 @@ BOOST_AUTO_TEST_CASE( transfer_apply )
     tx.operations.push_back( op );
     tx.set_expiration( db->head_block_time() + HIVE_MAX_TIME_UNTIL_EXPIRATION );
     sign( tx, alice_private_key );
-    db->push_transaction( tx, database::skip_transaction_dupe_check );
+    push_transaction( tx, database::skip_transaction_dupe_check );
 
     BOOST_REQUIRE( new_alice.get_balance().amount.value == ASSET( "0.000 TESTS" ).amount.value );
     BOOST_REQUIRE( new_bob.get_balance().amount.value == ASSET( "10.000 TESTS" ).amount.value );
@@ -1425,7 +1650,7 @@ BOOST_AUTO_TEST_CASE( transfer_apply )
     tx.operations.push_back( op );
     tx.set_expiration( db->head_block_time() + HIVE_MAX_TIME_UNTIL_EXPIRATION );
     sign( tx, alice_private_key );
-    HIVE_REQUIRE_THROW( db->push_transaction( tx, database::skip_transaction_dupe_check ), fc::exception );
+    HIVE_REQUIRE_THROW( push_transaction( tx, database::skip_transaction_dupe_check ), fc::exception );
 
     BOOST_REQUIRE( new_alice.get_balance().amount.value == ASSET( "0.000 TESTS" ).amount.value );
     BOOST_REQUIRE( new_bob.get_balance().amount.value == ASSET( "10.000 TESTS" ).amount.value );
@@ -1443,7 +1668,7 @@ BOOST_AUTO_TEST_CASE( transfer_apply )
     tx.operations.clear();
     tx.operations.push_back( op );
     sign( tx, bob_private_key );
-    db->push_transaction( tx );
+    push_transaction( tx );
     BOOST_REQUIRE( get_balance( "bob" ) == ASSET( "9.000 TESTS" ) );
     BOOST_REQUIRE( db->get_treasury().get_hbd_balance() == treasury_hbd_balance + ASSET( "1.000 TBD" ) );
     validate_database();
@@ -1455,7 +1680,7 @@ BOOST_AUTO_TEST_CASE( transfer_apply )
     tx.operations.clear();
     tx.operations.push_back( op );
     sign( tx, bob_private_key );
-    db->push_transaction( tx );
+    push_transaction( tx );
 
     BOOST_REQUIRE( get_hbd_balance( "bob" ) == ASSET( "0.000 TBD" ) );
     BOOST_REQUIRE( db->get_treasury().get_hbd_balance() == treasury_hbd_balance + ASSET( "1.000 TBD" ) );
@@ -1494,28 +1719,28 @@ BOOST_AUTO_TEST_CASE( transfer_to_vesting_authorities )
     tx.operations.push_back( op );
 
     BOOST_TEST_MESSAGE( "--- Test failure when no signatures" );
-    HIVE_REQUIRE_THROW( db->push_transaction( tx, 0 ), tx_missing_active_auth );
+    HIVE_REQUIRE_THROW( push_transaction( tx, 0 ), tx_missing_active_auth );
 
     BOOST_TEST_MESSAGE( "--- Test failure when signed by a signature not in the account's authority" );
     sign( tx, alice_post_key );
-    HIVE_REQUIRE_THROW( db->push_transaction( tx, 0 ), tx_missing_active_auth );
+    HIVE_REQUIRE_THROW( push_transaction( tx, 0 ), tx_missing_active_auth );
 
     BOOST_TEST_MESSAGE( "--- Test failure when duplicate signatures" );
     tx.signatures.clear();
     sign( tx, alice_private_key );
     sign( tx, alice_private_key );
-    HIVE_REQUIRE_THROW( db->push_transaction( tx, 0 ), tx_duplicate_sig );
+    HIVE_REQUIRE_THROW( push_transaction( tx, 0 ), tx_duplicate_sig );
 
     BOOST_TEST_MESSAGE( "--- Test failure when signed by an additional signature not in the creator's authority" );
     tx.signatures.clear();
     sign( tx, alice_private_key );
     sign( tx, bob_private_key );
-    HIVE_REQUIRE_THROW( db->push_transaction( tx, 0 ), tx_irrelevant_sig );
+    HIVE_REQUIRE_THROW( push_transaction( tx, 0 ), tx_irrelevant_sig );
 
     BOOST_TEST_MESSAGE( "--- Test success with from signature" );
     tx.signatures.clear();
     sign( tx, alice_private_key );
-    db->push_transaction( tx, 0 );
+    push_transaction( tx, 0 );
 
     validate_database();
   }
@@ -1549,15 +1774,15 @@ BOOST_AUTO_TEST_CASE( transfer_to_vesting_apply )
     tx.operations.push_back( op );
     tx.set_expiration( db->head_block_time() + HIVE_MAX_TIME_UNTIL_EXPIRATION );
     sign( tx, alice_private_key );
-    HIVE_REQUIRE_THROW( db->push_transaction( tx, 0 ), fc::exception );
+    HIVE_REQUIRE_THROW( push_transaction( tx, 0 ), fc::exception );
 
     op.to = "";
     tx.clear();
     tx.operations.push_back( op );
     sign( tx, alice_private_key );
-    db->push_transaction( tx, 0 );
+    push_transaction( tx, 0 );
 
-    auto new_vest = op.amount * ( shares / vests );
+    auto new_vest = op.amount * price( shares, vests );
     shares += new_vest;
     vests += op.amount;
     alice_shares += new_vest;
@@ -1575,9 +1800,9 @@ BOOST_AUTO_TEST_CASE( transfer_to_vesting_apply )
     tx.operations.push_back( op );
     tx.set_expiration( db->head_block_time() + HIVE_MAX_TIME_UNTIL_EXPIRATION );
     sign( tx, alice_private_key );
-    db->push_transaction( tx, 0 );
+    push_transaction( tx, 0 );
 
-    new_vest = asset( ( op.amount * ( shares / vests ) ).amount, VESTS_SYMBOL );
+    new_vest = asset( ( op.amount * price( shares, vests ) ).amount, VESTS_SYMBOL );
     shares += new_vest;
     vests += op.amount;
     bob_shares += new_vest;
@@ -1590,7 +1815,7 @@ BOOST_AUTO_TEST_CASE( transfer_to_vesting_apply )
     BOOST_REQUIRE( gpo.get_total_vesting_shares().amount.value == shares.amount.value );
     validate_database();
 
-    HIVE_REQUIRE_THROW( db->push_transaction( tx, database::skip_transaction_dupe_check ), fc::exception );
+    HIVE_REQUIRE_THROW( push_transaction( tx, database::skip_transaction_dupe_check ), fc::exception );
 
     BOOST_REQUIRE( alice.get_balance().amount.value == ASSET( "0.500 TESTS" ).amount.value );
     BOOST_REQUIRE( alice.get_vesting().amount.value == alice_shares.amount.value );
@@ -1633,26 +1858,26 @@ BOOST_AUTO_TEST_CASE( withdraw_vesting_authorities )
     tx.set_expiration( db->head_block_time() + HIVE_MAX_TIME_UNTIL_EXPIRATION );
 
     BOOST_TEST_MESSAGE( "--- Test failure when no signature." );
-    HIVE_REQUIRE_THROW( db->push_transaction( tx, database::skip_transaction_dupe_check ), tx_missing_active_auth );
+    HIVE_REQUIRE_THROW( push_transaction( tx, database::skip_transaction_dupe_check ), tx_missing_active_auth );
 
     BOOST_TEST_MESSAGE( "--- Test success with account signature" );
     sign( tx, alice_private_key );
-    db->push_transaction( tx, database::skip_transaction_dupe_check );
+    push_transaction( tx, database::skip_transaction_dupe_check );
 
     BOOST_TEST_MESSAGE( "--- Test failure with duplicate signature" );
     sign( tx, alice_private_key );
-    HIVE_REQUIRE_THROW( db->push_transaction( tx, database::skip_transaction_dupe_check ), tx_duplicate_sig );
+    HIVE_REQUIRE_THROW( push_transaction( tx, database::skip_transaction_dupe_check ), tx_duplicate_sig );
 
     BOOST_TEST_MESSAGE( "--- Test failure with additional incorrect signature" );
     tx.signatures.clear();
     sign( tx, alice_private_key );
     sign( tx, bob_private_key );
-    HIVE_REQUIRE_THROW( db->push_transaction( tx, database::skip_transaction_dupe_check ), tx_irrelevant_sig );
+    HIVE_REQUIRE_THROW( push_transaction( tx, database::skip_transaction_dupe_check ), tx_irrelevant_sig );
 
     BOOST_TEST_MESSAGE( "--- Test failure with incorrect signature" );
     tx.signatures.clear();
     sign( tx, alice_post_key );
-    HIVE_REQUIRE_THROW( db->push_transaction( tx, database::skip_transaction_dupe_check ), tx_missing_active_auth );
+    HIVE_REQUIRE_THROW( push_transaction( tx, database::skip_transaction_dupe_check ), tx_missing_active_auth );
 
     validate_database();
   }
@@ -1682,7 +1907,7 @@ BOOST_AUTO_TEST_CASE( withdraw_vesting_apply )
     tx.operations.push_back( op );
     tx.set_expiration( db->head_block_time() + HIVE_MAX_TIME_UNTIL_EXPIRATION );
     sign( tx, alice_private_key );
-    HIVE_REQUIRE_THROW( db->push_transaction( tx, 0 ), fc::assert_exception );
+    HIVE_REQUIRE_THROW( push_transaction( tx, 0 ), fc::assert_exception );
 
 
     BOOST_TEST_MESSAGE( "--- Test withdraw of existing VESTS" );
@@ -1694,7 +1919,7 @@ BOOST_AUTO_TEST_CASE( withdraw_vesting_apply )
     tx.operations.push_back( op );
     tx.set_expiration( db->head_block_time() + HIVE_MAX_TIME_UNTIL_EXPIRATION );
     sign( tx, alice_private_key );
-    db->push_transaction( tx, 0 );
+    push_transaction( tx, 0 );
 
     BOOST_REQUIRE( alice.get_vesting().amount.value == old_vesting_shares.amount.value );
     BOOST_REQUIRE( alice.vesting_withdraw_rate.amount.value == ( old_vesting_shares.amount / ( HIVE_VESTING_WITHDRAW_INTERVALS * 2 ) ).value + 1 );
@@ -1710,7 +1935,7 @@ BOOST_AUTO_TEST_CASE( withdraw_vesting_apply )
     tx.operations.push_back( op );
     tx.set_expiration( db->head_block_time() + HIVE_MAX_TIME_UNTIL_EXPIRATION );
     sign( tx, alice_private_key );
-    db->push_transaction( tx, 0 );
+    push_transaction( tx, 0 );
 
     BOOST_REQUIRE( alice.get_vesting().amount.value == old_vesting_shares.amount.value );
     BOOST_REQUIRE( alice.vesting_withdraw_rate.amount.value == ( old_vesting_shares.amount / ( HIVE_VESTING_WITHDRAW_INTERVALS * 3 ) ).value + 1 );
@@ -1727,7 +1952,7 @@ BOOST_AUTO_TEST_CASE( withdraw_vesting_apply )
     tx.operations.push_back( op );
     tx.set_expiration( db->head_block_time() + HIVE_MAX_TIME_UNTIL_EXPIRATION );
     sign( tx, alice_private_key );
-    HIVE_REQUIRE_THROW( db->push_transaction( tx, 0 ), fc::exception );
+    HIVE_REQUIRE_THROW( push_transaction( tx, 0 ), fc::exception );
 
     BOOST_REQUIRE( alice.get_vesting().amount.value == old_vesting_shares.amount.value );
     BOOST_REQUIRE( alice.vesting_withdraw_rate.amount.value == ( old_vesting_shares.amount / ( HIVE_VESTING_WITHDRAW_INTERVALS * 3 ) ).value + 1 );
@@ -1742,7 +1967,7 @@ BOOST_AUTO_TEST_CASE( withdraw_vesting_apply )
     tx.operations.push_back( op );
     tx.set_expiration( db->head_block_time() + HIVE_MAX_TIME_UNTIL_EXPIRATION );
     sign( tx, alice_private_key );
-    db->push_transaction( tx, 0 );
+    push_transaction( tx, 0 );
 
     BOOST_REQUIRE( alice.get_vesting().amount.value == old_vesting_shares.amount.value );
     BOOST_REQUIRE( alice.vesting_withdraw_rate.amount.value == 0 );
@@ -1755,7 +1980,7 @@ BOOST_AUTO_TEST_CASE( withdraw_vesting_apply )
     tx.clear();
     tx.operations.push_back( op );
     sign( tx, alice_private_key );
-    db->push_transaction( tx, 0 );
+    push_transaction( tx, 0 );
     generate_block();
     }
 
@@ -1784,7 +2009,7 @@ BOOST_AUTO_TEST_CASE( withdraw_vesting_apply )
     tx.operations.push_back( op );
     tx.set_expiration( db->head_block_time() + HIVE_MAX_TIME_UNTIL_EXPIRATION );
     sign( tx, alice_private_key );
-    db->push_transaction( tx, 0 );
+    push_transaction( tx, 0 );
 
     BOOST_REQUIRE( db->get_account( "alice" ).vesting_withdraw_rate == ASSET( "0.000000 VESTS" ) );
     validate_database();
@@ -1795,7 +2020,7 @@ BOOST_AUTO_TEST_CASE( withdraw_vesting_apply )
     tx.clear();
     tx.operations.push_back( op );
     sign( tx, bob_private_key );
-    db->push_transaction( tx, 0 ); // We do not need to test the result of this, simply that it works.
+    push_transaction( tx, 0 ); // We do not need to test the result of this, simply that it works.
   }
   FC_LOG_AND_RETHROW()
 }
@@ -1833,32 +2058,32 @@ BOOST_AUTO_TEST_CASE( witness_update_authorities )
     tx.operations.push_back( op );
 
     BOOST_TEST_MESSAGE( "--- Test failure when no signatures" );
-    HIVE_REQUIRE_THROW( db->push_transaction( tx, 0 ), tx_missing_active_auth );
+    HIVE_REQUIRE_THROW( push_transaction( tx, 0 ), tx_missing_active_auth );
 
     BOOST_TEST_MESSAGE( "--- Test failure when signed by a signature not in the account's authority" );
     sign( tx, alice_post_key );
-    HIVE_REQUIRE_THROW( db->push_transaction( tx, 0 ), tx_missing_active_auth );
+    HIVE_REQUIRE_THROW( push_transaction( tx, 0 ), tx_missing_active_auth );
 
     BOOST_TEST_MESSAGE( "--- Test failure when duplicate signatures" );
     tx.signatures.clear();
     sign( tx, alice_private_key );
     sign( tx, alice_private_key );
-    HIVE_REQUIRE_THROW( db->push_transaction( tx, 0 ), tx_duplicate_sig );
+    HIVE_REQUIRE_THROW( push_transaction( tx, 0 ), tx_duplicate_sig );
 
     BOOST_TEST_MESSAGE( "--- Test failure when signed by an additional signature not in the creator's authority" );
     tx.signatures.clear();
     sign( tx, alice_private_key );
     sign( tx, bob_private_key );
-    HIVE_REQUIRE_THROW( db->push_transaction( tx, 0 ), tx_irrelevant_sig );
+    HIVE_REQUIRE_THROW( push_transaction( tx, 0 ), tx_irrelevant_sig );
 
     BOOST_TEST_MESSAGE( "--- Test success with witness signature" );
     tx.signatures.clear();
     sign( tx, alice_private_key );
-    db->push_transaction( tx, 0 );
+    push_transaction( tx, 0 );
 
     tx.signatures.clear();
     sign( tx, signing_key );
-    HIVE_REQUIRE_THROW( db->push_transaction( tx, database::skip_transaction_dupe_check ), tx_missing_active_auth );
+    HIVE_REQUIRE_THROW( push_transaction( tx, database::skip_transaction_dupe_check ), tx_missing_active_auth );
     validate_database();
   }
   FC_LOG_AND_RETHROW()
@@ -1890,7 +2115,7 @@ BOOST_AUTO_TEST_CASE( witness_update_apply )
     tx.operations.push_back( op );
     sign( tx, alice_private_key );
 
-    db->push_transaction( tx, 0 );
+    push_transaction( tx, 0 );
 
     const witness_object& alice_witness = db->get_witness( "alice" );
 
@@ -1919,7 +2144,7 @@ BOOST_AUTO_TEST_CASE( witness_update_apply )
     tx.operations.push_back( op );
     sign( tx, alice_private_key );
 
-    db->push_transaction( tx, 0 );
+    push_transaction( tx, 0 );
 
     BOOST_REQUIRE( alice_witness.owner == "alice" );
     BOOST_REQUIRE( alice_witness.created == db->head_block_time() );
@@ -1945,7 +2170,7 @@ BOOST_AUTO_TEST_CASE( witness_update_apply )
     op.owner = "bob";
     tx.operations.push_back( op );
     sign( tx, alice_private_key );
-    HIVE_REQUIRE_THROW( db->push_transaction( tx, 0 ), fc::exception );
+    HIVE_REQUIRE_THROW( push_transaction( tx, 0 ), fc::exception );
     validate_database();
   }
   FC_LOG_AND_RETHROW()
@@ -1983,34 +2208,34 @@ BOOST_AUTO_TEST_CASE( account_witness_vote_authorities )
     tx.operations.push_back( op );
 
     BOOST_TEST_MESSAGE( "--- Test failure when no signatures" );
-    HIVE_REQUIRE_THROW( db->push_transaction( tx, 0 ), tx_missing_active_auth );
+    HIVE_REQUIRE_THROW( push_transaction( tx, 0 ), tx_missing_active_auth );
 
     BOOST_TEST_MESSAGE( "--- Test failure when signed by a signature not in the account's authority" );
     sign( tx, bob_post_key );
-    HIVE_REQUIRE_THROW( db->push_transaction( tx, 0 ), tx_missing_active_auth );
+    HIVE_REQUIRE_THROW( push_transaction( tx, 0 ), tx_missing_active_auth );
 
     BOOST_TEST_MESSAGE( "--- Test failure when duplicate signatures" );
     tx.signatures.clear();
     sign( tx, bob_private_key );
     sign( tx, bob_private_key );
-    HIVE_REQUIRE_THROW( db->push_transaction( tx, 0 ), tx_duplicate_sig );
+    HIVE_REQUIRE_THROW( push_transaction( tx, 0 ), tx_duplicate_sig );
 
     BOOST_TEST_MESSAGE( "--- Test failure when signed by an additional signature not in the creator's authority" );
     tx.signatures.clear();
     sign( tx, bob_private_key );
     sign( tx, alice_private_key );
-    HIVE_REQUIRE_THROW( db->push_transaction( tx, 0 ), tx_irrelevant_sig );
+    HIVE_REQUIRE_THROW( push_transaction( tx, 0 ), tx_irrelevant_sig );
 
     BOOST_TEST_MESSAGE( "--- Test success with witness signature" );
     tx.signatures.clear();
     sign( tx, bob_private_key );
-    db->push_transaction( tx, 0 );
+    push_transaction( tx, 0 );
 
     BOOST_TEST_MESSAGE( "--- Test failure with proxy signature" );
     proxy( "bob", "sam" );
     tx.signatures.clear();
     sign( tx, sam_private_key );
-    HIVE_REQUIRE_THROW( db->push_transaction( tx, database::skip_transaction_dupe_check ), tx_missing_active_auth );
+    HIVE_REQUIRE_THROW( push_transaction( tx, database::skip_transaction_dupe_check ), tx_missing_active_auth );
 
     validate_database();
   }
@@ -2045,7 +2270,7 @@ BOOST_AUTO_TEST_CASE( account_witness_vote_apply )
     tx.operations.push_back( op );
     sign( tx, alice_private_key );
 
-    db->push_transaction( tx, 0 );
+    push_transaction( tx, 0 );
 
     BOOST_REQUIRE( sam_witness.votes == alice.get_real_vesting_shares() );
     BOOST_REQUIRE( witness_vote_idx.find( boost::make_tuple( sam_witness.owner, alice.name ) ) != witness_vote_idx.end() );
@@ -2058,13 +2283,13 @@ BOOST_AUTO_TEST_CASE( account_witness_vote_apply )
     tx.operations.push_back( op );
     sign( tx, alice_private_key );
 
-    db->push_transaction( tx, 0 );
+    push_transaction( tx, 0 );
     BOOST_REQUIRE( sam_witness.votes.value == 0 );
     BOOST_REQUIRE( witness_vote_idx.find( boost::make_tuple( sam_witness.owner, alice.name ) ) == witness_vote_idx.end() );
 
     BOOST_TEST_MESSAGE( "--- Test failure when attempting to revoke a non-existent vote" );
 
-    HIVE_REQUIRE_THROW( db->push_transaction( tx, database::skip_transaction_dupe_check ), fc::exception );
+    HIVE_REQUIRE_THROW( push_transaction( tx, database::skip_transaction_dupe_check ), fc::exception );
     BOOST_REQUIRE( sam_witness.votes.value == 0 );
     BOOST_REQUIRE( witness_vote_idx.find( boost::make_tuple( sam_witness.owner, alice.name ) ) == witness_vote_idx.end() );
 
@@ -2077,7 +2302,7 @@ BOOST_AUTO_TEST_CASE( account_witness_vote_apply )
     tx.operations.push_back( op );
     sign( tx, bob_private_key );
 
-    db->push_transaction( tx, 0 );
+    push_transaction( tx, 0 );
 
     BOOST_REQUIRE( sam_witness.votes == ( bob.proxied_vsf_votes_total() + bob.get_real_vesting_shares() ) );
     BOOST_REQUIRE( witness_vote_idx.find( boost::make_tuple( sam_witness.owner, bob.name ) ) != witness_vote_idx.end() );
@@ -2089,7 +2314,7 @@ BOOST_AUTO_TEST_CASE( account_witness_vote_apply )
     op.account = "alice";
     tx.operations.push_back( op );
     sign( tx, alice_private_key );
-    HIVE_REQUIRE_THROW( db->push_transaction( tx, database::skip_transaction_dupe_check ), fc::exception );
+    HIVE_REQUIRE_THROW( push_transaction( tx, database::skip_transaction_dupe_check ), fc::exception );
 
     BOOST_REQUIRE( sam_witness.votes == ( bob.proxied_vsf_votes_total() + bob.get_real_vesting_shares() ) );
     BOOST_REQUIRE( witness_vote_idx.find( boost::make_tuple( sam_witness.owner, bob.name ) ) != witness_vote_idx.end() );
@@ -2103,7 +2328,7 @@ BOOST_AUTO_TEST_CASE( account_witness_vote_apply )
     tx.operations.push_back( op );
     sign( tx, bob_private_key );
 
-    db->push_transaction( tx, 0 );
+    push_transaction( tx, 0 );
 
     BOOST_REQUIRE( sam_witness.votes.value == 0 );
     BOOST_REQUIRE( witness_vote_idx.find( boost::make_tuple( sam_witness.owner, bob.name ) ) == witness_vote_idx.end() );
@@ -2117,7 +2342,7 @@ BOOST_AUTO_TEST_CASE( account_witness_vote_apply )
     tx.operations.push_back( op );
     sign( tx, bob_private_key );
 
-    HIVE_REQUIRE_THROW( db->push_transaction( tx, 0 ), fc::exception );
+    HIVE_REQUIRE_THROW( push_transaction( tx, 0 ), fc::exception );
     validate_database();
 
     BOOST_TEST_MESSAGE( "--- Test failure when voting for an account that is not a witness" );
@@ -2127,7 +2352,7 @@ BOOST_AUTO_TEST_CASE( account_witness_vote_apply )
     tx.operations.push_back( op );
     sign( tx, bob_private_key );
 
-    HIVE_REQUIRE_THROW( db->push_transaction( tx, 0 ), fc::exception );
+    HIVE_REQUIRE_THROW( push_transaction( tx, 0 ), fc::exception );
     validate_database();
   }
   FC_LOG_AND_RETHROW()
@@ -2175,7 +2400,7 @@ BOOST_AUTO_TEST_CASE(account_witness_vote_apply_delay)
     tx.operations.push_back(op);
     sign(tx, alice_private_key);
 
-    db->push_transaction(tx, 0);
+    push_transaction(tx, 0);
 
     BOOST_REQUIRE(_sam_witness.votes == 0);
     BOOST_REQUIRE(_alice.get_vesting().amount == _alice.sum_delayed_votes.value);
@@ -2194,13 +2419,13 @@ BOOST_AUTO_TEST_CASE(account_witness_vote_apply_delay)
     tx.operations.push_back(op);
     sign(tx, alice_private_key);
 
-    db->push_transaction(tx, 0);
+    push_transaction(tx, 0);
     BOOST_REQUIRE(_sam_witness.votes.value == 0);
     BOOST_REQUIRE(witness_vote_idx.find(boost::make_tuple(_sam_witness.owner, _alice.name)) == witness_vote_idx.end());
 
     BOOST_TEST_MESSAGE("--- Test failure when attempting to revoke a non-existent vote");
 
-    HIVE_REQUIRE_THROW(db->push_transaction(tx, database::skip_transaction_dupe_check), fc::exception);
+    HIVE_REQUIRE_THROW(push_transaction(tx, database::skip_transaction_dupe_check), fc::exception);
     BOOST_REQUIRE(_sam_witness.votes.value == 0);
     BOOST_REQUIRE(witness_vote_idx.find(boost::make_tuple(_sam_witness.owner, _alice.name)) == witness_vote_idx.end());
 
@@ -2213,7 +2438,7 @@ BOOST_AUTO_TEST_CASE(account_witness_vote_apply_delay)
     tx.operations.push_back(op);
     sign(tx, bob_private_key);
 
-    db->push_transaction(tx, 0);
+    push_transaction(tx, 0);
 
     //since all vests are already mature voting has immediate effect
     BOOST_REQUIRE(_alice.get_vesting().amount == _bob.proxied_vsf_votes_total());
@@ -2228,7 +2453,7 @@ BOOST_AUTO_TEST_CASE(account_witness_vote_apply_delay)
     op.account = "alice";
     tx.operations.push_back(op);
     sign(tx, alice_private_key);
-    HIVE_REQUIRE_THROW(db->push_transaction(tx, database::skip_transaction_dupe_check), fc::exception);
+    HIVE_REQUIRE_THROW(push_transaction(tx, database::skip_transaction_dupe_check), fc::exception);
 
     BOOST_REQUIRE(_alice.get_vesting().amount == _bob.proxied_vsf_votes_total());
     BOOST_REQUIRE(_sam_witness.votes == (_alice.get_vesting().amount + _bob.get_vesting().amount));
@@ -2243,7 +2468,7 @@ BOOST_AUTO_TEST_CASE(account_witness_vote_apply_delay)
     tx.operations.push_back(op);
     sign(tx, bob_private_key);
 
-    db->push_transaction(tx, 0);
+    push_transaction(tx, 0);
 
     BOOST_REQUIRE(_sam_witness.votes.value == 0);
     BOOST_REQUIRE(witness_vote_idx.find(boost::make_tuple(_sam_witness.owner, _bob.name)) == witness_vote_idx.end());
@@ -2257,7 +2482,7 @@ BOOST_AUTO_TEST_CASE(account_witness_vote_apply_delay)
     tx.operations.push_back(op);
     sign(tx, bob_private_key);
 
-    HIVE_REQUIRE_THROW(db->push_transaction(tx, 0), fc::exception);
+    HIVE_REQUIRE_THROW(push_transaction(tx, 0), fc::exception);
     validate_database();
 
     BOOST_TEST_MESSAGE("--- Test failure when voting for an account that is not a witness");
@@ -2267,7 +2492,7 @@ BOOST_AUTO_TEST_CASE(account_witness_vote_apply_delay)
     tx.operations.push_back(op);
     sign(tx, bob_private_key);
 
-    HIVE_REQUIRE_THROW(db->push_transaction(tx, 0), fc::exception);
+    HIVE_REQUIRE_THROW(push_transaction(tx, 0), fc::exception);
     validate_database();
   }
   FC_LOG_AND_RETHROW()
@@ -2294,7 +2519,7 @@ BOOST_AUTO_TEST_CASE( account_object_by_governance_vote_expiration_ts_idx )
       tx.set_expiration( db->head_block_time() + HIVE_MAX_TIME_UNTIL_EXPIRATION );
       tx.operations.push_back( op );
       sign( tx, key );
-      db->push_transaction( tx, 0 );
+      push_transaction( tx, 0 );
       tx.clear();
     };
 
@@ -2307,7 +2532,7 @@ BOOST_AUTO_TEST_CASE( account_object_by_governance_vote_expiration_ts_idx )
       tx.set_expiration( db->head_block_time() + HIVE_MAX_TIME_UNTIL_EXPIRATION );
       tx.operations.push_back( op );
       sign( tx, key );
-      db->push_transaction( tx, 0 );
+      push_transaction( tx, 0 );
       tx.clear();
     };
 
@@ -2367,33 +2592,33 @@ BOOST_AUTO_TEST_CASE( account_witness_proxy_authorities )
     tx.operations.push_back( op );
 
     BOOST_TEST_MESSAGE( "--- Test failure when no signatures" );
-    HIVE_REQUIRE_THROW( db->push_transaction( tx, 0 ), tx_missing_active_auth );
+    HIVE_REQUIRE_THROW( push_transaction( tx, 0 ), tx_missing_active_auth );
 
     BOOST_TEST_MESSAGE( "--- Test failure when signed by a signature not in the account's authority" );
     sign( tx, bob_post_key );
-    HIVE_REQUIRE_THROW( db->push_transaction( tx, 0 ), tx_missing_active_auth );
+    HIVE_REQUIRE_THROW( push_transaction( tx, 0 ), tx_missing_active_auth );
 
     BOOST_TEST_MESSAGE( "--- Test failure when duplicate signatures" );
     tx.signatures.clear();
     sign( tx, bob_private_key );
     sign( tx, bob_private_key );
-    HIVE_REQUIRE_THROW( db->push_transaction( tx, 0 ), tx_duplicate_sig );
+    HIVE_REQUIRE_THROW( push_transaction( tx, 0 ), tx_duplicate_sig );
 
     BOOST_TEST_MESSAGE( "--- Test failure when signed by an additional signature not in the creator's authority" );
     tx.signatures.clear();
     sign( tx, bob_private_key );
     sign( tx, alice_private_key );
-    HIVE_REQUIRE_THROW( db->push_transaction( tx, 0 ), tx_irrelevant_sig );
+    HIVE_REQUIRE_THROW( push_transaction( tx, 0 ), tx_irrelevant_sig );
 
     BOOST_TEST_MESSAGE( "--- Test success with witness signature" );
     tx.signatures.clear();
     sign( tx, bob_private_key );
-    db->push_transaction( tx, 0 );
+    push_transaction( tx, 0 );
 
     BOOST_TEST_MESSAGE( "--- Test failure with proxy signature" );
     tx.signatures.clear();
     sign( tx, alice_private_key );
-    HIVE_REQUIRE_THROW( db->push_transaction( tx, database::skip_transaction_dupe_check ), tx_missing_active_auth );
+    HIVE_REQUIRE_THROW( push_transaction( tx, database::skip_transaction_dupe_check ), tx_missing_active_auth );
 
     validate_database();
   }
@@ -2428,7 +2653,7 @@ BOOST_AUTO_TEST_CASE( account_witness_proxy_apply )
     tx.set_expiration( db->head_block_time() + HIVE_MAX_TIME_UNTIL_EXPIRATION );
     sign( tx, bob_private_key );
 
-    db->push_transaction( tx, 0 );
+    push_transaction( tx, 0 );
 
     CHECK_PROXY( bob, alice );
     BOOST_REQUIRE( bob.proxied_vsf_votes_total().value == 0 );
@@ -2445,7 +2670,7 @@ BOOST_AUTO_TEST_CASE( account_witness_proxy_apply )
     tx.operations.push_back( op );
     sign( tx, bob_private_key );
 
-    db->push_transaction( tx, 0 );
+    push_transaction( tx, 0 );
 
     CHECK_PROXY( bob, sam );
     BOOST_REQUIRE( bob.proxied_vsf_votes_total().value == 0 );
@@ -2456,7 +2681,7 @@ BOOST_AUTO_TEST_CASE( account_witness_proxy_apply )
 
     BOOST_TEST_MESSAGE( "--- Test failure when changing proxy to existing proxy" );
 
-    HIVE_REQUIRE_THROW( db->push_transaction( tx, database::skip_transaction_dupe_check ), fc::exception );
+    HIVE_REQUIRE_THROW( push_transaction( tx, database::skip_transaction_dupe_check ), fc::exception );
 
     CHECK_PROXY( bob, sam );
     BOOST_REQUIRE( bob.proxied_vsf_votes_total().value == 0 );
@@ -2474,7 +2699,7 @@ BOOST_AUTO_TEST_CASE( account_witness_proxy_apply )
     tx.operations.push_back( op );
     sign( tx, sam_private_key );
 
-    db->push_transaction( tx, 0 );
+    push_transaction( tx, 0 );
 
     CHECK_PROXY( bob, sam );
     BOOST_REQUIRE( bob.proxied_vsf_votes_total().value == 0 );
@@ -2496,7 +2721,7 @@ BOOST_AUTO_TEST_CASE( account_witness_proxy_apply )
     tx.operations.push_back( op );
     sign( tx, alice_private_key );
 
-    db->push_transaction( tx, 0 );
+    push_transaction( tx, 0 );
 
     CHECK_PROXY( alice, sam );
     BOOST_REQUIRE( alice.proxied_vsf_votes_total().value == 0 );
@@ -2518,7 +2743,7 @@ BOOST_AUTO_TEST_CASE( account_witness_proxy_apply )
     tx.operations.push_back( op );
     sign( tx, bob_private_key );
 
-    db->push_transaction( tx, 0 );
+    push_transaction( tx, 0 );
 
     CHECK_PROXY( alice, sam );
     BOOST_REQUIRE( alice.proxied_vsf_votes_total().value == 0 );
@@ -2539,7 +2764,7 @@ BOOST_AUTO_TEST_CASE( account_witness_proxy_apply )
     tx.operations.push_back( vote );
     sign( tx, bob_private_key );
 
-    db->push_transaction( tx, 0 );
+    push_transaction( tx, 0 );
 
     tx.operations.clear();
     tx.signatures.clear();
@@ -2548,7 +2773,7 @@ BOOST_AUTO_TEST_CASE( account_witness_proxy_apply )
     tx.operations.push_back( op );
     sign( tx, alice_private_key );
 
-    db->push_transaction( tx, 0 );
+    push_transaction( tx, 0 );
 
     BOOST_REQUIRE( db->get_witness( HIVE_INIT_MINER_NAME ).votes == ( alice.get_real_vesting_shares() + bob.get_real_vesting_shares() ) );
     validate_database();
@@ -2560,7 +2785,7 @@ BOOST_AUTO_TEST_CASE( account_witness_proxy_apply )
     tx.operations.push_back( op );
     sign( tx, alice_private_key );
 
-    db->push_transaction( tx, 0 );
+    push_transaction( tx, 0 );
 
     BOOST_REQUIRE( db->get_witness( HIVE_INIT_MINER_NAME ).votes == bob.get_real_vesting_shares() );
     validate_database();
@@ -2608,7 +2833,7 @@ BOOST_AUTO_TEST_CASE( account_witness_proxy_apply_delay )
     tx.set_expiration( db->head_block_time() + HIVE_MAX_TIME_UNTIL_EXPIRATION );
     sign( tx, bob_private_key );
 
-    db->push_transaction( tx, 0 );
+    push_transaction( tx, 0 );
 
     CHECK_PROXY( _bob, _alice );
     BOOST_REQUIRE( _bob.proxied_vsf_votes_total().value == 0 );
@@ -2628,7 +2853,7 @@ BOOST_AUTO_TEST_CASE( account_witness_proxy_apply_delay )
     tx.operations.push_back( op );
     sign( tx, bob_private_key );
 
-    db->push_transaction( tx, 0 );
+    push_transaction( tx, 0 );
 
     CHECK_PROXY( _bob, _sam );
     BOOST_REQUIRE( _bob.proxied_vsf_votes_total().value == 0 );
@@ -2640,7 +2865,7 @@ BOOST_AUTO_TEST_CASE( account_witness_proxy_apply_delay )
 
     BOOST_TEST_MESSAGE( "--- Test failure when changing proxy to existing proxy" );
 
-    HIVE_REQUIRE_THROW( db->push_transaction( tx, database::skip_transaction_dupe_check ), fc::exception );
+    HIVE_REQUIRE_THROW( push_transaction( tx, database::skip_transaction_dupe_check ), fc::exception );
 
     CHECK_PROXY( _bob, _sam );
     BOOST_REQUIRE( _bob.proxied_vsf_votes_total().value == 0 );
@@ -2658,7 +2883,7 @@ BOOST_AUTO_TEST_CASE( account_witness_proxy_apply_delay )
     tx.operations.push_back( op );
     sign( tx, sam_private_key );
 
-    db->push_transaction( tx, 0 );
+    push_transaction( tx, 0 );
 
     CHECK_PROXY( _bob, _sam );
     BOOST_REQUIRE( _bob.proxied_vsf_votes_total().value == 0 );
@@ -2680,7 +2905,7 @@ BOOST_AUTO_TEST_CASE( account_witness_proxy_apply_delay )
     tx.operations.push_back( op );
     sign( tx, alice_private_key );
 
-    db->push_transaction( tx, 0 );
+    push_transaction( tx, 0 );
 
     CHECK_PROXY( _alice, _sam );
     BOOST_REQUIRE( _alice.proxied_vsf_votes_total().value == 0 );
@@ -2702,7 +2927,7 @@ BOOST_AUTO_TEST_CASE( account_witness_proxy_apply_delay )
     tx.operations.push_back( op );
     sign( tx, bob_private_key );
 
-    db->push_transaction( tx, 0 );
+    push_transaction( tx, 0 );
 
     CHECK_PROXY( _alice, _sam );
     BOOST_REQUIRE( _alice.proxied_vsf_votes_total().value == 0 );
@@ -2723,7 +2948,7 @@ BOOST_AUTO_TEST_CASE( account_witness_proxy_apply_delay )
     tx.operations.push_back( vote );
     sign( tx, bob_private_key );
 
-    db->push_transaction( tx, 0 );
+    push_transaction( tx, 0 );
 
     tx.operations.clear();
     tx.signatures.clear();
@@ -2732,7 +2957,7 @@ BOOST_AUTO_TEST_CASE( account_witness_proxy_apply_delay )
     tx.operations.push_back( op );
     sign( tx, alice_private_key );
 
-    db->push_transaction( tx, 0 );
+    push_transaction( tx, 0 );
 
     BOOST_REQUIRE( db->get_witness( HIVE_INIT_MINER_NAME ).votes == ( _alice.get_vesting() + _bob.get_vesting() ).amount );
     validate_database();
@@ -2744,7 +2969,7 @@ BOOST_AUTO_TEST_CASE( account_witness_proxy_apply_delay )
     tx.operations.push_back( op );
     sign( tx, alice_private_key );
 
-    db->push_transaction( tx, 0 );
+    push_transaction( tx, 0 );
 
     BOOST_REQUIRE( db->get_witness( HIVE_INIT_MINER_NAME ).votes == _bob.get_vesting().amount );
     validate_database();
@@ -2817,7 +3042,7 @@ BOOST_AUTO_TEST_CASE( custom_json_rate_limit )
       tx.clear();
       tx.operations.push_back( op );
       sign( tx, alice_private_key );
-      db->push_transaction( tx, 0 );
+      push_transaction( tx, 0 );
     }
 
 
@@ -2828,7 +3053,7 @@ BOOST_AUTO_TEST_CASE( custom_json_rate_limit )
     tx.operations.push_back( op );
     sign( tx, alice_private_key );
 
-    HIVE_REQUIRE_THROW( db->push_transaction( tx, 0 ), plugin_exception );
+    HIVE_REQUIRE_THROW( push_transaction( tx, 0 ), plugin_exception );
 
 
     BOOST_TEST_MESSAGE( "--- Testing 5 custom json ops in one transaction" );
@@ -2843,7 +3068,7 @@ BOOST_AUTO_TEST_CASE( custom_json_rate_limit )
     }
 
     sign( tx, bob_private_key );
-    db->push_transaction( tx, 0 );
+    push_transaction( tx, 0 );
 
 
     BOOST_TEST_MESSAGE( "--- Testing failure pushing 6th custom json op tx" );
@@ -2853,7 +3078,7 @@ BOOST_AUTO_TEST_CASE( custom_json_rate_limit )
     tx.operations.push_back( op );
     sign( tx, bob_private_key );
 
-    HIVE_REQUIRE_THROW( db->push_transaction( tx, 0 ), plugin_exception );
+    HIVE_REQUIRE_THROW( push_transaction( tx, 0 ), plugin_exception );
 
 
     BOOST_TEST_MESSAGE( "--- Testing failure of 6 custom json ops in one transaction" );
@@ -2867,7 +3092,7 @@ BOOST_AUTO_TEST_CASE( custom_json_rate_limit )
     }
 
     sign( tx, sam_private_key );
-    HIVE_REQUIRE_THROW( db->push_transaction( tx, 0 ), plugin_exception );
+    HIVE_REQUIRE_THROW( push_transaction( tx, 0 ), plugin_exception );
   }
   FC_LOG_AND_RETHROW()
 }
@@ -2936,28 +3161,28 @@ BOOST_AUTO_TEST_CASE( feed_publish_authorities )
     tx.set_expiration( db->head_block_time() + HIVE_MAX_TIME_UNTIL_EXPIRATION );
 
     BOOST_TEST_MESSAGE( "--- Test failure when no signature." );
-    HIVE_REQUIRE_THROW( db->push_transaction( tx, database::skip_transaction_dupe_check ), tx_missing_active_auth );
+    HIVE_REQUIRE_THROW( push_transaction( tx, database::skip_transaction_dupe_check ), tx_missing_active_auth );
 
     BOOST_TEST_MESSAGE( "--- Test failure with incorrect signature" );
     tx.signatures.clear();
     sign( tx, alice_post_key );
-    HIVE_REQUIRE_THROW( db->push_transaction( tx, database::skip_transaction_dupe_check ), tx_missing_active_auth );
+    HIVE_REQUIRE_THROW( push_transaction( tx, database::skip_transaction_dupe_check ), tx_missing_active_auth );
 
     BOOST_TEST_MESSAGE( "--- Test failure with duplicate signature" );
     sign( tx, alice_private_key );
     sign( tx, alice_private_key );
-    HIVE_REQUIRE_THROW( db->push_transaction( tx, database::skip_transaction_dupe_check ), tx_duplicate_sig );
+    HIVE_REQUIRE_THROW( push_transaction( tx, database::skip_transaction_dupe_check ), tx_duplicate_sig );
 
     BOOST_TEST_MESSAGE( "--- Test failure with additional incorrect signature" );
     tx.signatures.clear();
     sign( tx, alice_private_key );
     sign( tx, bob_private_key );
-    HIVE_REQUIRE_THROW( db->push_transaction( tx, database::skip_transaction_dupe_check ), tx_irrelevant_sig );
+    HIVE_REQUIRE_THROW( push_transaction( tx, database::skip_transaction_dupe_check ), tx_irrelevant_sig );
 
     BOOST_TEST_MESSAGE( "--- Test success with witness account signature" );
     tx.signatures.clear();
     sign( tx, alice_private_key );
-    db->push_transaction( tx, database::skip_transaction_dupe_check );
+    push_transaction( tx, database::skip_transaction_dupe_check );
 
     validate_database();
   }
@@ -2984,7 +3209,7 @@ BOOST_AUTO_TEST_CASE( feed_publish_apply )
     tx.operations.push_back( op );
     sign( tx, alice_private_key );
 
-    db->push_transaction( tx, 0 );
+    push_transaction( tx, 0 );
 
     {
       auto& alice_witness = db->get_witness( "alice" );
@@ -3001,7 +3226,7 @@ BOOST_AUTO_TEST_CASE( feed_publish_apply )
     op.publisher = "bob";
     sign( tx, alice_private_key );
 
-    HIVE_REQUIRE_THROW( db->push_transaction( tx, 0 ), fc::exception );
+    HIVE_REQUIRE_THROW( push_transaction( tx, 0 ), fc::exception );
     validate_database();
 
     BOOST_TEST_MESSAGE( "--- Test failure publishing with HBD base symbol" );
@@ -3011,7 +3236,7 @@ BOOST_AUTO_TEST_CASE( feed_publish_apply )
     op.exchange_rate = price( ASSET( "1.000 TBD" ), ASSET( "1.000 TESTS" ) );
     sign( tx, alice_private_key );
 
-    HIVE_REQUIRE_THROW( db->push_transaction( tx, 0 ), fc::assert_exception );
+    HIVE_REQUIRE_THROW( push_transaction( tx, 0 ), fc::assert_exception );
     validate_database();
 
     BOOST_TEST_MESSAGE( "--- Test updating price feed" );
@@ -3023,7 +3248,7 @@ BOOST_AUTO_TEST_CASE( feed_publish_apply )
     tx.operations.push_back( op );
     sign( tx, alice_private_key );
 
-    db->push_transaction( tx, 0 );
+    push_transaction( tx, 0 );
 
     auto& alice_witness = db->get_witness( "alice" );
     // BOOST_REQUIRE( std::abs( alice_witness.get_hbd_exchange_rate().to_real() - op.exchange_rate.to_real() ) < 0.0000005 );
@@ -3066,28 +3291,28 @@ BOOST_AUTO_TEST_CASE( convert_authorities )
     tx.operations.push_back( op );
 
     BOOST_TEST_MESSAGE( "--- Test failure when no signatures" );
-    HIVE_REQUIRE_THROW( db->push_transaction( tx, 0 ), tx_missing_active_auth );
+    HIVE_REQUIRE_THROW( push_transaction( tx, 0 ), tx_missing_active_auth );
 
     BOOST_TEST_MESSAGE( "--- Test failure when signed by a signature not in the account's authority" );
     sign( tx, alice_post_key );
-    HIVE_REQUIRE_THROW( db->push_transaction( tx, 0 ), tx_missing_active_auth );
+    HIVE_REQUIRE_THROW( push_transaction( tx, 0 ), tx_missing_active_auth );
 
     BOOST_TEST_MESSAGE( "--- Test failure when duplicate signatures" );
     tx.signatures.clear();
     sign( tx, alice_private_key );
     sign( tx, alice_private_key );
-    HIVE_REQUIRE_THROW( db->push_transaction( tx, 0 ), tx_duplicate_sig );
+    HIVE_REQUIRE_THROW( push_transaction( tx, 0 ), tx_duplicate_sig );
 
     BOOST_TEST_MESSAGE( "--- Test failure when signed by an additional signature not in the creator's authority" );
     tx.signatures.clear();
     sign( tx, alice_private_key );
     sign( tx, bob_private_key );
-    HIVE_REQUIRE_THROW( db->push_transaction( tx, 0 ), tx_irrelevant_sig );
+    HIVE_REQUIRE_THROW( push_transaction( tx, 0 ), tx_irrelevant_sig );
 
     BOOST_TEST_MESSAGE( "--- Test success with owner signature" );
     tx.signatures.clear();
     sign( tx, alice_private_key );
-    db->push_transaction( tx, 0 );
+    push_transaction( tx, 0 );
 
     validate_database();
   }
@@ -3122,7 +3347,7 @@ BOOST_AUTO_TEST_CASE( convert_apply )
     op.amount = ASSET( "5.000 TESTS" );
     tx.operations.push_back( op );
     sign( tx, bob_private_key );
-    HIVE_REQUIRE_THROW( db->push_transaction( tx, 0 ), fc::exception );
+    HIVE_REQUIRE_THROW( push_transaction( tx, 0 ), fc::exception );
 
     BOOST_REQUIRE( new_bob.get_balance().amount.value == ASSET( "3.000 TESTS" ).amount.value );
     BOOST_REQUIRE( new_bob.get_hbd_balance().amount.value == ASSET( "7.000 TBD" ).amount.value );
@@ -3135,7 +3360,7 @@ BOOST_AUTO_TEST_CASE( convert_apply )
     tx.signatures.clear();
     tx.operations.push_back( op );
     sign( tx, alice_private_key );
-    HIVE_REQUIRE_THROW( db->push_transaction( tx, 0 ), fc::exception );
+    HIVE_REQUIRE_THROW( push_transaction( tx, 0 ), fc::exception );
 
     BOOST_REQUIRE( new_alice.get_balance().amount.value == ASSET( "7.500 TESTS" ).amount.value );
     BOOST_REQUIRE( new_alice.get_hbd_balance().amount.value == ASSET( "2.500 TBD" ).amount.value );
@@ -3147,7 +3372,7 @@ BOOST_AUTO_TEST_CASE( convert_apply )
     tx.signatures.clear();
     tx.operations.push_back( op );
     sign( tx, alice_private_key );
-    HIVE_REQUIRE_THROW( db->push_transaction( tx, 0 ), fc::exception );
+    HIVE_REQUIRE_THROW( push_transaction( tx, 0 ), fc::exception );
 
     BOOST_TEST_MESSAGE( "--- Test success converting HBD to TESTS" );
     op.owner = "bob";
@@ -3157,7 +3382,7 @@ BOOST_AUTO_TEST_CASE( convert_apply )
     tx.operations.push_back( op );
     tx.set_expiration( db->head_block_time() + HIVE_MAX_TIME_UNTIL_EXPIRATION );
     sign( tx, bob_private_key );
-    db->push_transaction( tx, 0 );
+    push_transaction( tx, 0 );
 
     BOOST_REQUIRE( new_bob.get_balance().amount.value == ASSET( "3.000 TESTS" ).amount.value );
     BOOST_REQUIRE( new_bob.get_hbd_balance().amount.value == ASSET( "4.000 TBD" ).amount.value );
@@ -3176,7 +3401,7 @@ BOOST_AUTO_TEST_CASE( convert_apply )
     tx.signatures.clear();
     tx.operations.push_back( op );
     sign( tx, alice_private_key );
-    HIVE_REQUIRE_THROW( db->push_transaction( tx, 0 ), fc::exception );
+    HIVE_REQUIRE_THROW( push_transaction( tx, 0 ), fc::exception );
 
     BOOST_REQUIRE( new_bob.get_balance().amount.value == ASSET( "3.000 TESTS" ).amount.value );
     BOOST_REQUIRE( new_bob.get_hbd_balance().amount.value == ASSET( "4.000 TBD" ).amount.value );
@@ -3231,28 +3456,28 @@ BOOST_AUTO_TEST_CASE( collateralized_convert_authorities )
     tx.operations.push_back( op );
 
     BOOST_TEST_MESSAGE( "--- Test failure when no signatures" );
-    HIVE_REQUIRE_THROW( db->push_transaction( tx, 0 ), tx_missing_active_auth );
+    HIVE_REQUIRE_THROW( push_transaction( tx, 0 ), tx_missing_active_auth );
 
     BOOST_TEST_MESSAGE( "--- Test failure when signed by a signature not in the account's authority" );
     sign( tx, alice_post_key );
-    HIVE_REQUIRE_THROW( db->push_transaction( tx, 0 ), tx_missing_active_auth );
+    HIVE_REQUIRE_THROW( push_transaction( tx, 0 ), tx_missing_active_auth );
 
     BOOST_TEST_MESSAGE( "--- Test failure when duplicate signatures" );
     tx.signatures.clear();
     sign( tx, alice_private_key );
     sign( tx, alice_private_key );
-    HIVE_REQUIRE_THROW( db->push_transaction( tx, 0 ), tx_duplicate_sig );
+    HIVE_REQUIRE_THROW( push_transaction( tx, 0 ), tx_duplicate_sig );
 
     BOOST_TEST_MESSAGE( "--- Test failure when signed by an additional signature not in the creator's authority" );
     tx.signatures.clear();
     sign( tx, alice_private_key );
     sign( tx, bob_private_key );
-    HIVE_REQUIRE_THROW( db->push_transaction( tx, 0 ), tx_irrelevant_sig );
+    HIVE_REQUIRE_THROW( push_transaction( tx, 0 ), tx_irrelevant_sig );
 
     BOOST_TEST_MESSAGE( "--- Test success with owner signature" );
     tx.signatures.clear();
     sign( tx, alice_private_key );
-    db->push_transaction( tx, 0 );
+    push_transaction( tx, 0 );
 
     validate_database();
     generate_block();
@@ -3271,7 +3496,7 @@ BOOST_AUTO_TEST_CASE( collateralized_convert_authorities )
     tx.signatures.clear();
     tx.set_expiration( db->head_block_time() + HIVE_MAX_TIME_UNTIL_EXPIRATION );
     sign( tx, alice_private_key );
-    HIVE_REQUIRE_ASSERT( db->push_transaction( tx, 0 ), "!fhistory.current_median_history.is_null()" );
+    HIVE_REQUIRE_ASSERT( push_transaction( tx, 0 ), "!fhistory.current_median_history.is_null()" );
 
     validate_database();
   }
@@ -3421,7 +3646,7 @@ BOOST_AUTO_TEST_CASE( collateralized_convert_apply )
     }
     transfer( "alice", db->get_treasury_name(), get_hbd_balance( "alice" ) );
 
-    BOOST_TEST_MESSAGE( "--- Setting amount of HBD in the system to the edge of hard limit" );
+    BOOST_TEST_MESSAGE( "--- Setting amount of HBD in the system to the edge of upper soft limit" );
     {
       fc::uint128_t amount( dgpo.get_current_supply().amount.value );
       uint16_t limit2 = 2 * dgpo.hbd_stop_percent + HIVE_1_BASIS_POINT; //there is rounding when percent is calculated, hence some strange correction
@@ -3443,7 +3668,7 @@ BOOST_AUTO_TEST_CASE( collateralized_convert_apply )
     //let's make some room for conversion (treasury HBD does not count)
     transfer( "alice", db->get_treasury_name(), ASSET( "25.000 TBD" ) );
 
-    BOOST_TEST_MESSAGE( "--- Test ok - conversion at 5 cents initial, 5 cents per HIVE actual (while price is artificial)" );
+    BOOST_TEST_MESSAGE( "--- Test ok - conversion at 5 cents initial, 5 cents per HIVE actual" );
     op.amount = ASSET( "1000.000 TESTS" );
     auto conversion_4_time = db->head_block_time();
     auto alice_hbd_balance = get_hbd_balance( "alice" );
@@ -3454,7 +3679,7 @@ BOOST_AUTO_TEST_CASE( collateralized_convert_apply )
     alice_hbd_balance += ASSET( "23.809 TBD" ); // 1000/2 collateral * 1/21 price with fee
     BOOST_REQUIRE( get_hbd_balance( "alice" ) == alice_hbd_balance );
 
-    BOOST_TEST_MESSAGE( "--- Test ok - regular conversion at artificial price" );
+    BOOST_TEST_MESSAGE( "--- Test ok - regular conversion" );
     {
       //let's schedule conversion from HBD to hive
       convert_operation op;
@@ -3463,17 +3688,32 @@ BOOST_AUTO_TEST_CASE( collateralized_convert_apply )
       push_transaction( op, bob_private_key );
     }
     generate_block();
+    BOOST_REQUIRE_EQUAL( dgpo.hbd_print_rate, 0 );
 
-    //since we are nearly on the edge of HBD hard limit, let's use the opportunity and test what happens when we try to cross it
-    fund( "bob", dgpo.get_current_hbd_supply() );
-    generate_blocks( HIVE_FEED_INTERVAL_BLOCKS - ( dgpo.head_block_number % HIVE_FEED_INTERVAL_BLOCKS ) );
-    //last feed update should've put up artificial price of HIVE
-    auto recent_ops = get_last_operations( 2 );
-    auto sys_warn_op = recent_ops.back().get< system_warning_operation >();
-    BOOST_REQUIRE( sys_warn_op.message.compare( 0, 27, "HIVE price corrected upward" ) == 0 );
+    BOOST_TEST_MESSAGE( "--- Test failed - conversion initiated while at or above upper soft limit" );
+    op.amount = ASSET( "1000.000 TESTS" );
+    HIVE_REQUIRE_ASSERT( push_transaction( op, alice_private_key ), "dgpo.hbd_print_rate > 0" );
 
-    price price_1_for_10 = price( ASSET( "1.000 TBD" ), ASSET( "10.000 TESTS" ) );
-    BOOST_REQUIRE( ( feed.current_median_history > price_1_for_10 ) && feed.current_median_history < price_1_for_8 );
+    //since we are already on the edge of HBD upper soft limit which means we can't convert more anyway,
+    //let's use the opportunity and test what happens when we try to cross hard limit
+    {
+      auto extra_hbd = dgpo.get_current_hbd_supply();
+      int16_t diff = HIVE_HBD_HARD_LIMIT - dgpo.hbd_stop_percent;
+      if( diff < 0 )
+        diff = 0; //just in case we'd have incorrect configuration with hard limit below upper soft limit
+      extra_hbd.amount *= diff;
+      extra_hbd.amount /= dgpo.hbd_stop_percent; //HBD supply multiplied by the same factor as a difference between hard and upper soft limit
+      extra_hbd += dgpo.get_current_hbd_supply(); //to always have some value above hard limit
+      fund( "bob", extra_hbd );
+
+      generate_blocks( HIVE_FEED_INTERVAL_BLOCKS - ( dgpo.head_block_number % HIVE_FEED_INTERVAL_BLOCKS ) );
+      //last feed update should've put up artificial price of HIVE
+      auto recent_ops = get_last_operations( 2 );
+      auto sys_warn_op = recent_ops.back().get< system_warning_operation >();
+      BOOST_REQUIRE( sys_warn_op.message.compare( 0, 27, "HIVE price corrected upward" ) == 0 );
+    }
+
+    BOOST_REQUIRE( feed.current_median_history > price_1_for_20 );
     BOOST_REQUIRE( feed.current_max_history == price_1_for_4 ); //it is hard to force artificial correction of max price when it is so high to begin with
     BOOST_REQUIRE( feed.market_median_history == price_1_for_20 ); //market driven median price should be intact
     BOOST_REQUIRE( feed.current_min_history == price_1_for_20 ); //minimal price should be intact
@@ -3485,7 +3725,10 @@ BOOST_AUTO_TEST_CASE( collateralized_convert_apply )
     generate_block(); //actual conversion
     alice_balance += ASSET( "500.011 TESTS" ); //excess collateral (1000 - 23.809 * 21/1) - alice used fee corrected market_median_price...
     BOOST_REQUIRE( get_balance( "alice" ) == alice_balance );
-    BOOST_REQUIRE( get_balance( "bob" ) == ASSET( "199.102 TESTS" ) ); //...but bob used ~1/10 price (artificial current_median_history)
+    BOOST_REQUIRE( get_balance( "bob" ) == ASSET( "273.625 TESTS" ) ); //...but bob used artificial current_median_history
+      //(for HF25 values of 9%/10%/10% lower/upper/hard cap expected value is 199.102)
+      //(for 9%/10%/30% expected value is 383.222)
+      //with different limits value will change, but should be less than 400.000 TESTS
 
     //put HBD on treasury where it does not count, but try to make some conversion with artificial price before it is changed back down
     transfer( "alice", db->get_treasury_name(), get_hbd_balance( "alice" ) );
@@ -3666,26 +3909,26 @@ BOOST_AUTO_TEST_CASE( limit_order_create_authorities )
     tx.set_expiration( db->head_block_time() + HIVE_MAX_TIME_UNTIL_EXPIRATION );
 
     BOOST_TEST_MESSAGE( "--- Test failure when no signature." );
-    HIVE_REQUIRE_THROW( db->push_transaction( tx, database::skip_transaction_dupe_check ), tx_missing_active_auth );
+    HIVE_REQUIRE_THROW( push_transaction( tx, database::skip_transaction_dupe_check ), tx_missing_active_auth );
 
     BOOST_TEST_MESSAGE( "--- Test success with account signature" );
     sign( tx, alice_private_key );
-    db->push_transaction( tx, database::skip_transaction_dupe_check );
+    push_transaction( tx, database::skip_transaction_dupe_check );
 
     BOOST_TEST_MESSAGE( "--- Test failure with duplicate signature" );
     sign( tx, alice_private_key );
-    HIVE_REQUIRE_THROW( db->push_transaction( tx, database::skip_transaction_dupe_check ), tx_duplicate_sig );
+    HIVE_REQUIRE_THROW( push_transaction( tx, database::skip_transaction_dupe_check ), tx_duplicate_sig );
 
     BOOST_TEST_MESSAGE( "--- Test failure with additional incorrect signature" );
     tx.signatures.clear();
     sign( tx, alice_private_key );
     sign( tx, bob_private_key );
-    HIVE_REQUIRE_THROW( db->push_transaction( tx, database::skip_transaction_dupe_check ), tx_irrelevant_sig );
+    HIVE_REQUIRE_THROW( push_transaction( tx, database::skip_transaction_dupe_check ), tx_irrelevant_sig );
 
     BOOST_TEST_MESSAGE( "--- Test failure with incorrect signature" );
     tx.signatures.clear();
     sign( tx, alice_post_key );
-    HIVE_REQUIRE_THROW( db->push_transaction( tx, database::skip_transaction_dupe_check ), tx_missing_active_auth );
+    HIVE_REQUIRE_THROW( push_transaction( tx, database::skip_transaction_dupe_check ), tx_missing_active_auth );
 
     validate_database();
   }
@@ -3720,7 +3963,7 @@ BOOST_AUTO_TEST_CASE( limit_order_create_apply )
     tx.operations.push_back( op );
     tx.set_expiration( db->head_block_time() + HIVE_MAX_TIME_UNTIL_EXPIRATION );
     sign( tx, bob_private_key );
-    HIVE_REQUIRE_THROW( db->push_transaction( tx, 0 ), fc::exception );
+    HIVE_REQUIRE_THROW( push_transaction( tx, 0 ), fc::exception );
 
     BOOST_REQUIRE( limit_order_idx.find( boost::make_tuple( "bob", op.orderid ) ) == limit_order_idx.end() );
     BOOST_REQUIRE( bob.get_balance().amount.value == ASSET( "0.000 TESTS" ).amount.value );
@@ -3735,7 +3978,7 @@ BOOST_AUTO_TEST_CASE( limit_order_create_apply )
     tx.signatures.clear();
     tx.operations.push_back( op );
     sign( tx, alice_private_key );
-    HIVE_REQUIRE_THROW( db->push_transaction( tx, 0 ), fc::exception );
+    HIVE_REQUIRE_THROW( push_transaction( tx, 0 ), fc::exception );
 
     BOOST_REQUIRE( limit_order_idx.find( boost::make_tuple( "alice", op.orderid ) ) == limit_order_idx.end() );
     BOOST_REQUIRE( alice.get_balance().amount.value == ASSET( "1000.000 TESTS" ).amount.value );
@@ -3750,7 +3993,7 @@ BOOST_AUTO_TEST_CASE( limit_order_create_apply )
     tx.signatures.clear();
     tx.operations.push_back( op );
     sign( tx, alice_private_key );
-    HIVE_REQUIRE_THROW( db->push_transaction( tx, 0 ), fc::exception );
+    HIVE_REQUIRE_THROW( push_transaction( tx, 0 ), fc::exception );
 
     BOOST_REQUIRE( limit_order_idx.find( boost::make_tuple( "alice", op.orderid ) ) == limit_order_idx.end() );
     BOOST_REQUIRE( alice.get_balance().amount.value == ASSET( "1000.000 TESTS" ).amount.value );
@@ -3765,7 +4008,7 @@ BOOST_AUTO_TEST_CASE( limit_order_create_apply )
     tx.signatures.clear();
     tx.operations.push_back( op );
     sign( tx, alice_private_key );
-    HIVE_REQUIRE_THROW( db->push_transaction( tx, 0 ), fc::exception );
+    HIVE_REQUIRE_THROW( push_transaction( tx, 0 ), fc::exception );
 
     BOOST_TEST_MESSAGE( "--- Test success creating limit order that will not be filled" );
 
@@ -3774,14 +4017,14 @@ BOOST_AUTO_TEST_CASE( limit_order_create_apply )
     tx.signatures.clear();
     tx.operations.push_back( op );
     sign( tx, alice_private_key );
-    db->push_transaction( tx, 0 );
+    push_transaction( tx, 0 );
 
     auto limit_order = limit_order_idx.find( boost::make_tuple( "alice", op.orderid ) );
     BOOST_REQUIRE( limit_order != limit_order_idx.end() );
     BOOST_REQUIRE( limit_order->seller == op.owner );
     BOOST_REQUIRE( limit_order->orderid == op.orderid );
     BOOST_REQUIRE( limit_order->for_sale == op.amount_to_sell.amount );
-    BOOST_REQUIRE( limit_order->sell_price == price( op.amount_to_sell / op.min_to_receive ) );
+    BOOST_REQUIRE( limit_order->sell_price == price( op.amount_to_sell, op.min_to_receive ) );
     BOOST_REQUIRE( limit_order->get_market() == std::make_pair( HBD_SYMBOL, HIVE_SYMBOL ) );
     BOOST_REQUIRE( alice.get_balance().amount.value == ASSET( "990.000 TESTS" ).amount.value );
     BOOST_REQUIRE( alice.get_hbd_balance().amount.value == ASSET( "0.000 TBD" ).amount.value );
@@ -3794,7 +4037,7 @@ BOOST_AUTO_TEST_CASE( limit_order_create_apply )
     tx.signatures.clear();
     tx.operations.push_back( op );
     sign( tx, alice_private_key );
-    HIVE_REQUIRE_THROW( db->push_transaction( tx, 0 ), fc::exception );
+    HIVE_REQUIRE_THROW( push_transaction( tx, 0 ), fc::exception );
 
     limit_order = limit_order_idx.find( boost::make_tuple( "alice", op.orderid ) );
     BOOST_REQUIRE( limit_order != limit_order_idx.end() );
@@ -3815,7 +4058,7 @@ BOOST_AUTO_TEST_CASE( limit_order_create_apply )
     tx.signatures.clear();
     tx.operations.push_back( op );
     sign( tx, alice_private_key );
-    HIVE_REQUIRE_THROW( db->push_transaction( tx, 0 ), fc::exception );
+    HIVE_REQUIRE_THROW( push_transaction( tx, 0 ), fc::exception );
 
     BOOST_REQUIRE( limit_order_idx.find( boost::make_tuple( "alice", op.orderid ) ) == limit_order_idx.end() );
     BOOST_REQUIRE( alice.get_balance().amount.value == ASSET( "990.000 TESTS" ).amount.value );
@@ -3835,7 +4078,7 @@ BOOST_AUTO_TEST_CASE( limit_order_create_apply )
     tx.signatures.clear();
     tx.operations.push_back( op );
     sign( tx, bob_private_key );
-    db->push_transaction( tx, 0 );
+    push_transaction( tx, 0 );
 
     auto recent_ops = get_last_operations( 1 );
     auto fill_order_op = recent_ops[0].get< fill_order_operation >();
@@ -3868,7 +4111,7 @@ BOOST_AUTO_TEST_CASE( limit_order_create_apply )
     tx.signatures.clear();
     tx.operations.push_back( op );
     sign( tx, bob_private_key );
-    db->push_transaction( tx, 0 );
+    push_transaction( tx, 0 );
 
     limit_order = limit_order_idx.find( boost::make_tuple( "bob", 1 ) );
     BOOST_REQUIRE( limit_order != limit_order_idx.end() );
@@ -3894,7 +4137,7 @@ BOOST_AUTO_TEST_CASE( limit_order_create_apply )
     tx.signatures.clear();
     tx.operations.push_back( op );
     sign( tx, alice_private_key );
-    db->push_transaction( tx, 0 );
+    push_transaction( tx, 0 );
 
     BOOST_REQUIRE( limit_order_idx.find( boost::make_tuple( "alice", 3 ) ) == limit_order_idx.end() );
     BOOST_REQUIRE( limit_order_idx.find( boost::make_tuple( "bob", 1 ) ) == limit_order_idx.end() );
@@ -3914,7 +4157,7 @@ BOOST_AUTO_TEST_CASE( limit_order_create_apply )
     tx.signatures.clear();
     tx.operations.push_back( op );
     sign( tx, alice_private_key );
-    db->push_transaction( tx, 0 );
+    push_transaction( tx, 0 );
 
     op.owner = "bob";
     op.orderid = 4;
@@ -3924,7 +4167,7 @@ BOOST_AUTO_TEST_CASE( limit_order_create_apply )
     tx.signatures.clear();
     tx.operations.push_back( op );
     sign( tx, bob_private_key );
-    db->push_transaction( tx, 0 );
+    push_transaction( tx, 0 );
 
     limit_order = limit_order_idx.find( boost::make_tuple( "bob", 4 ) );
     BOOST_REQUIRE( limit_order != limit_order_idx.end() );
@@ -3947,7 +4190,7 @@ BOOST_AUTO_TEST_CASE( limit_order_create_apply )
     tx.signatures.clear();
     tx.operations.push_back( can );
     sign( tx, bob_private_key );
-    db->push_transaction( tx, 0 );
+    push_transaction( tx, 0 );
 
     BOOST_TEST_MESSAGE( "--- Test filling limit order with better order when partial order is worse." );
 
@@ -3962,7 +4205,7 @@ BOOST_AUTO_TEST_CASE( limit_order_create_apply )
     tx.signatures.clear();
     tx.operations.push_back( op );
     sign( tx, alice_private_key );
-    db->push_transaction( tx, 0 );
+    push_transaction( tx, 0 );
 
     op.owner = "bob";
     op.orderid = 5;
@@ -3972,7 +4215,7 @@ BOOST_AUTO_TEST_CASE( limit_order_create_apply )
     tx.signatures.clear();
     tx.operations.push_back( op );
     sign( tx, bob_private_key );
-    db->push_transaction( tx, 0 );
+    push_transaction( tx, 0 );
 
     limit_order = limit_order_idx.find( boost::make_tuple( "alice", 5 ) );
     BOOST_REQUIRE( limit_order != limit_order_idx.end() );
@@ -4011,26 +4254,26 @@ BOOST_AUTO_TEST_CASE( limit_order_create2_authorities )
     tx.set_expiration( db->head_block_time() + HIVE_MAX_TIME_UNTIL_EXPIRATION );
 
     BOOST_TEST_MESSAGE( "--- Test failure when no signature." );
-    HIVE_REQUIRE_THROW( db->push_transaction( tx, database::skip_transaction_dupe_check ), tx_missing_active_auth );
+    HIVE_REQUIRE_THROW( push_transaction( tx, database::skip_transaction_dupe_check ), tx_missing_active_auth );
 
     BOOST_TEST_MESSAGE( "--- Test success with account signature" );
     sign( tx, alice_private_key );
-    db->push_transaction( tx, database::skip_transaction_dupe_check );
+    push_transaction( tx, database::skip_transaction_dupe_check );
 
     BOOST_TEST_MESSAGE( "--- Test failure with duplicate signature" );
     sign( tx, alice_private_key );
-    HIVE_REQUIRE_THROW( db->push_transaction( tx, database::skip_transaction_dupe_check ), tx_duplicate_sig );
+    HIVE_REQUIRE_THROW( push_transaction( tx, database::skip_transaction_dupe_check ), tx_duplicate_sig );
 
     BOOST_TEST_MESSAGE( "--- Test failure with additional incorrect signature" );
     tx.signatures.clear();
     sign( tx, alice_private_key );
     sign( tx, bob_private_key );
-    HIVE_REQUIRE_THROW( db->push_transaction( tx, database::skip_transaction_dupe_check ), tx_irrelevant_sig );
+    HIVE_REQUIRE_THROW( push_transaction( tx, database::skip_transaction_dupe_check ), tx_irrelevant_sig );
 
     BOOST_TEST_MESSAGE( "--- Test failure with incorrect signature" );
     tx.signatures.clear();
     sign( tx, alice_post_key );
-    HIVE_REQUIRE_THROW( db->push_transaction( tx, database::skip_transaction_dupe_check ), tx_missing_active_auth );
+    HIVE_REQUIRE_THROW( push_transaction( tx, database::skip_transaction_dupe_check ), tx_missing_active_auth );
 
     validate_database();
   }
@@ -4065,7 +4308,7 @@ BOOST_AUTO_TEST_CASE( limit_order_create2_apply )
     tx.operations.push_back( op );
     tx.set_expiration( db->head_block_time() + HIVE_MAX_TIME_UNTIL_EXPIRATION );
     sign( tx, bob_private_key );
-    HIVE_REQUIRE_THROW( db->push_transaction( tx, 0 ), fc::exception );
+    HIVE_REQUIRE_THROW( push_transaction( tx, 0 ), fc::exception );
 
     BOOST_REQUIRE( limit_order_idx.find( boost::make_tuple( "bob", op.orderid ) ) == limit_order_idx.end() );
     BOOST_REQUIRE( bob.get_balance().amount.value == ASSET( "0.000 TESTS" ).amount.value );
@@ -4084,7 +4327,7 @@ BOOST_AUTO_TEST_CASE( limit_order_create2_apply )
       HIVE_REQUIRE_THROW(broken_price=price(ASSET("1.000 TESTS"), ASSET("0.000 TBD")),
         fc::exception);
       /// Invalid symbol (same in base & quote)
-      HIVE_REQUIRE_THROW(broken_price=price(ASSET("1.000 TESTS"), ASSET("0.000 TESTS")),
+      HIVE_REQUIRE_THROW(broken_price=price(ASSET("1.000 TESTS"), ASSET("1.000 TESTS")),
         fc::exception);
     }
 
@@ -4100,7 +4343,7 @@ BOOST_AUTO_TEST_CASE( limit_order_create2_apply )
     tx.signatures.clear();
     tx.operations.push_back( op );
     sign( tx, alice_private_key );
-    HIVE_REQUIRE_THROW( db->push_transaction( tx, 0 ), fc::exception );
+    HIVE_REQUIRE_THROW( push_transaction( tx, 0 ), fc::exception );
 
     BOOST_REQUIRE( limit_order_idx.find( boost::make_tuple( "alice", op.orderid ) ) == limit_order_idx.end() );
     BOOST_REQUIRE( alice.get_balance().amount.value == ASSET( "1000.000 TESTS" ).amount.value );
@@ -4115,7 +4358,7 @@ BOOST_AUTO_TEST_CASE( limit_order_create2_apply )
     tx.signatures.clear();
     tx.operations.push_back( op );
     sign( tx, alice_private_key );
-    HIVE_REQUIRE_THROW( db->push_transaction( tx, 0 ), fc::exception );
+    HIVE_REQUIRE_THROW( push_transaction( tx, 0 ), fc::exception );
 
     BOOST_REQUIRE( limit_order_idx.find( boost::make_tuple( "alice", op.orderid ) ) == limit_order_idx.end() );
     BOOST_REQUIRE( alice.get_balance().amount.value == ASSET( "1000.000 TESTS" ).amount.value );
@@ -4130,7 +4373,7 @@ BOOST_AUTO_TEST_CASE( limit_order_create2_apply )
     tx.signatures.clear();
     tx.operations.push_back( op );
     sign( tx, alice_private_key );
-    HIVE_REQUIRE_THROW( db->push_transaction( tx, 0 ), fc::exception );
+    HIVE_REQUIRE_THROW( push_transaction( tx, 0 ), fc::exception );
 
     BOOST_TEST_MESSAGE( "--- Test success creating limit order that will not be filled" );
 
@@ -4139,7 +4382,7 @@ BOOST_AUTO_TEST_CASE( limit_order_create2_apply )
     tx.signatures.clear();
     tx.operations.push_back( op );
     sign( tx, alice_private_key );
-    db->push_transaction( tx, 0 );
+    push_transaction( tx, 0 );
 
     auto limit_order = limit_order_idx.find( boost::make_tuple( "alice", op.orderid ) );
     BOOST_REQUIRE( limit_order != limit_order_idx.end() );
@@ -4159,7 +4402,7 @@ BOOST_AUTO_TEST_CASE( limit_order_create2_apply )
     tx.signatures.clear();
     tx.operations.push_back( op );
     sign( tx, alice_private_key );
-    HIVE_REQUIRE_THROW( db->push_transaction( tx, 0 ), fc::exception );
+    HIVE_REQUIRE_THROW( push_transaction( tx, 0 ), fc::exception );
 
     limit_order = limit_order_idx.find( boost::make_tuple( "alice", op.orderid ) );
     BOOST_REQUIRE( limit_order != limit_order_idx.end() );
@@ -4180,7 +4423,7 @@ BOOST_AUTO_TEST_CASE( limit_order_create2_apply )
     tx.signatures.clear();
     tx.operations.push_back( op );
     sign( tx, alice_private_key );
-    HIVE_REQUIRE_THROW( db->push_transaction( tx, 0 ), fc::exception );
+    HIVE_REQUIRE_THROW( push_transaction( tx, 0 ), fc::exception );
 
     BOOST_REQUIRE( limit_order_idx.find( boost::make_tuple( "alice", op.orderid ) ) == limit_order_idx.end() );
     BOOST_REQUIRE( alice.get_balance().amount.value == ASSET( "990.000 TESTS" ).amount.value );
@@ -4200,7 +4443,7 @@ BOOST_AUTO_TEST_CASE( limit_order_create2_apply )
     tx.signatures.clear();
     tx.operations.push_back( op );
     sign( tx, bob_private_key );
-    db->push_transaction( tx, 0 );
+    push_transaction( tx, 0 );
 
     auto recent_ops = get_last_operations( 1 );
     auto fill_order_op = recent_ops[0].get< fill_order_operation >();
@@ -4233,7 +4476,7 @@ BOOST_AUTO_TEST_CASE( limit_order_create2_apply )
     tx.signatures.clear();
     tx.operations.push_back( op );
     sign( tx, bob_private_key );
-    db->push_transaction( tx, 0 );
+    push_transaction( tx, 0 );
 
     limit_order = limit_order_idx.find( boost::make_tuple( "bob", 1 ) );
     BOOST_REQUIRE( limit_order != limit_order_idx.end() );
@@ -4259,7 +4502,7 @@ BOOST_AUTO_TEST_CASE( limit_order_create2_apply )
     tx.signatures.clear();
     tx.operations.push_back( op );
     sign( tx, alice_private_key );
-    db->push_transaction( tx, 0 );
+    push_transaction( tx, 0 );
 
     BOOST_REQUIRE( limit_order_idx.find( boost::make_tuple( "alice", 3 ) ) == limit_order_idx.end() );
     BOOST_REQUIRE( limit_order_idx.find( boost::make_tuple( "bob", 1 ) ) == limit_order_idx.end() );
@@ -4279,7 +4522,7 @@ BOOST_AUTO_TEST_CASE( limit_order_create2_apply )
     tx.signatures.clear();
     tx.operations.push_back( op );
     sign( tx, alice_private_key );
-    db->push_transaction( tx, 0 );
+    push_transaction( tx, 0 );
 
     op.owner = "bob";
     op.orderid = 4;
@@ -4289,7 +4532,7 @@ BOOST_AUTO_TEST_CASE( limit_order_create2_apply )
     tx.signatures.clear();
     tx.operations.push_back( op );
     sign( tx, bob_private_key );
-    db->push_transaction( tx, 0 );
+    push_transaction( tx, 0 );
 
     limit_order = limit_order_idx.find( boost::make_tuple( "bob", 4 ) );
     BOOST_REQUIRE( limit_order != limit_order_idx.end() );
@@ -4312,7 +4555,7 @@ BOOST_AUTO_TEST_CASE( limit_order_create2_apply )
     tx.signatures.clear();
     tx.operations.push_back( can );
     sign( tx, bob_private_key );
-    db->push_transaction( tx, 0 );
+    push_transaction( tx, 0 );
 
     BOOST_TEST_MESSAGE( "--- Test filling limit order with better order when partial order is worse." );
 
@@ -4328,7 +4571,7 @@ BOOST_AUTO_TEST_CASE( limit_order_create2_apply )
     tx.signatures.clear();
     tx.operations.push_back( op );
     sign( tx, alice_private_key );
-    db->push_transaction( tx, 0 );
+    push_transaction( tx, 0 );
 
     op.owner = "bob";
     op.orderid = 5;
@@ -4338,7 +4581,7 @@ BOOST_AUTO_TEST_CASE( limit_order_create2_apply )
     tx.signatures.clear();
     tx.operations.push_back( op );
     sign( tx, bob_private_key );
-    db->push_transaction( tx, 0 );
+    push_transaction( tx, 0 );
 
     limit_order = limit_order_idx.find( boost::make_tuple( "alice", 5 ) );
     BOOST_REQUIRE( limit_order != limit_order_idx.end() );
@@ -4368,7 +4611,7 @@ BOOST_AUTO_TEST_CASE( limit_order_create2_apply )
     tx.operations.push_back( op );
     tx.set_expiration( db->head_block_time() + HIVE_MAX_TIME_UNTIL_EXPIRATION );
     sign( tx, bob_private_key );
-    db->push_transaction( tx, 0 );
+    push_transaction( tx, 0 );
 
     op.owner = "sam";
     op.orderid = 1;
@@ -4378,7 +4621,7 @@ BOOST_AUTO_TEST_CASE( limit_order_create2_apply )
     tx.signatures.clear();
     tx.operations.push_back( op );
     sign( tx, sam_private_key );
-    db->push_transaction( tx, 0 );
+    push_transaction( tx, 0 );
 
     op.owner = "alice";
     op.orderid = 6;
@@ -4388,7 +4631,7 @@ BOOST_AUTO_TEST_CASE( limit_order_create2_apply )
     tx.signatures.clear();
     tx.operations.push_back( op );
     sign( tx, alice_private_key );
-    db->push_transaction( tx, 0 );
+    push_transaction( tx, 0 );
 
     op.owner = "dave";
     op.orderid = 1;
@@ -4398,10 +4641,10 @@ BOOST_AUTO_TEST_CASE( limit_order_create2_apply )
     tx.signatures.clear();
     tx.operations.push_back( op );
     sign( tx, dave_private_key );
-    db->push_transaction( tx, 0 );
+    push_transaction( tx, 0 );
 
-    recent_ops = get_last_operations( 3 );
-    fill_order_op = recent_ops[2].get< fill_order_operation >();
+    recent_ops = get_last_operations( 2 );
+    fill_order_op = recent_ops[1].get< fill_order_operation >();
     BOOST_REQUIRE( fill_order_op.open_owner == "sam" );
     BOOST_REQUIRE( fill_order_op.open_orderid == 1 );
     BOOST_REQUIRE( fill_order_op.open_pays == ASSET( "20.000 TESTS") );
@@ -4462,7 +4705,7 @@ BOOST_AUTO_TEST_CASE( limit_order_cancel_authorities )
     tx.operations.push_back( c );
     tx.set_expiration( db->head_block_time() + HIVE_MAX_TIME_UNTIL_EXPIRATION );
     sign( tx, alice_private_key );
-    db->push_transaction( tx, 0 );
+    push_transaction( tx, 0 );
 
     limit_order_cancel_operation op;
     op.owner = "alice";
@@ -4473,26 +4716,26 @@ BOOST_AUTO_TEST_CASE( limit_order_cancel_authorities )
     tx.operations.push_back( op );
 
     BOOST_TEST_MESSAGE( "--- Test failure when no signature." );
-    HIVE_REQUIRE_THROW( db->push_transaction( tx, database::skip_transaction_dupe_check ), tx_missing_active_auth );
+    HIVE_REQUIRE_THROW( push_transaction( tx, database::skip_transaction_dupe_check ), tx_missing_active_auth );
 
     BOOST_TEST_MESSAGE( "--- Test success with account signature" );
     sign( tx, alice_private_key );
-    db->push_transaction( tx, database::skip_transaction_dupe_check );
+    push_transaction( tx, database::skip_transaction_dupe_check );
 
     BOOST_TEST_MESSAGE( "--- Test failure with duplicate signature" );
     sign( tx, alice_private_key );
-    HIVE_REQUIRE_THROW( db->push_transaction( tx, database::skip_transaction_dupe_check ), tx_duplicate_sig );
+    HIVE_REQUIRE_THROW( push_transaction( tx, database::skip_transaction_dupe_check ), tx_duplicate_sig );
 
     BOOST_TEST_MESSAGE( "--- Test failure with additional incorrect signature" );
     tx.signatures.clear();
     sign( tx, alice_private_key );
     sign( tx, bob_private_key );
-    HIVE_REQUIRE_THROW( db->push_transaction( tx, database::skip_transaction_dupe_check ), tx_irrelevant_sig );
+    HIVE_REQUIRE_THROW( push_transaction( tx, database::skip_transaction_dupe_check ), tx_irrelevant_sig );
 
     BOOST_TEST_MESSAGE( "--- Test failure with incorrect signature" );
     tx.signatures.clear();
     sign( tx, alice_post_key );
-    HIVE_REQUIRE_THROW( db->push_transaction( tx, database::skip_transaction_dupe_check ), tx_missing_active_auth );
+    HIVE_REQUIRE_THROW( push_transaction( tx, database::skip_transaction_dupe_check ), tx_missing_active_auth );
 
     validate_database();
   }
@@ -4520,7 +4763,7 @@ BOOST_AUTO_TEST_CASE( limit_order_cancel_apply )
     tx.operations.push_back( op );
     tx.set_expiration( db->head_block_time() + HIVE_MAX_TIME_UNTIL_EXPIRATION );
     sign( tx, alice_private_key );
-    HIVE_REQUIRE_THROW( db->push_transaction( tx, 0 ), fc::exception );
+    HIVE_REQUIRE_THROW( push_transaction( tx, 0 ), fc::exception );
 
     BOOST_TEST_MESSAGE( "--- Test cancel order" );
 
@@ -4534,7 +4777,7 @@ BOOST_AUTO_TEST_CASE( limit_order_cancel_apply )
     tx.signatures.clear();
     tx.operations.push_back( create );
     sign( tx, alice_private_key );
-    db->push_transaction( tx, 0 );
+    push_transaction( tx, 0 );
 
     BOOST_REQUIRE( limit_order_idx.find( boost::make_tuple( "alice", 5 ) ) != limit_order_idx.end() );
 
@@ -4542,7 +4785,7 @@ BOOST_AUTO_TEST_CASE( limit_order_cancel_apply )
     tx.signatures.clear();
     tx.operations.push_back( op );
     sign( tx, alice_private_key );
-    db->push_transaction( tx, 0 );
+    push_transaction( tx, 0 );
 
     BOOST_REQUIRE( limit_order_idx.find( boost::make_tuple( "alice", 5 ) ) == limit_order_idx.end() );
     BOOST_REQUIRE( alice.get_balance().amount.value == ASSET( "10.000 TESTS" ).amount.value );
@@ -4615,7 +4858,7 @@ BOOST_AUTO_TEST_CASE( account_recovery )
     tx.operations.push_back( acc_create );
     tx.set_expiration( db->head_block_time() + HIVE_MAX_TIME_UNTIL_EXPIRATION );
     sign( tx, alice_private_key );
-    db->push_transaction( tx, 0 );
+    push_transaction( tx, 0 );
 
     vest( HIVE_INIT_MINER_NAME, "bob", asset( 1000, HIVE_SYMBOL ) );
 
@@ -4636,7 +4879,7 @@ BOOST_AUTO_TEST_CASE( account_recovery )
 
     tx.operations.push_back( acc_update );
     sign( tx, generate_private_key( "bob_owner" ) );
-    db->push_transaction( tx, 0 );
+    push_transaction( tx, 0 );
 
     BOOST_REQUIRE( bob_auth.owner == *acc_update.owner );
 
@@ -4653,7 +4896,7 @@ BOOST_AUTO_TEST_CASE( account_recovery )
 
     tx.operations.push_back( request );
     sign( tx, alice_private_key );
-    db->push_transaction( tx, 0 );
+    push_transaction( tx, 0 );
 
     BOOST_REQUIRE( bob_auth.owner == *acc_update.owner );
 
@@ -4673,7 +4916,7 @@ BOOST_AUTO_TEST_CASE( account_recovery )
     tx.operations.push_back( recover );
     sign( tx, generate_private_key( "bob_owner" ) );
     sign( tx, generate_private_key( "new_key" ) );
-    db->push_transaction( tx, 0 );
+    push_transaction( tx, 0 );
     const auto& owner1 = db->get< account_authority_object, by_account >("bob").owner;
 
     BOOST_REQUIRE( owner1 == recover.new_owner_authority );
@@ -4688,7 +4931,7 @@ BOOST_AUTO_TEST_CASE( account_recovery )
 
     tx.operations.push_back( request );
     sign( tx, alice_private_key );
-    db->push_transaction( tx, 0 );
+    push_transaction( tx, 0 );
 
 
     BOOST_TEST_MESSAGE( "Testing failure when bob does not have new authority" );
@@ -4703,7 +4946,7 @@ BOOST_AUTO_TEST_CASE( account_recovery )
     tx.operations.push_back( recover );
     sign( tx, generate_private_key( "bob_owner" ) );
     sign( tx, generate_private_key( "idontknow" ) );
-    HIVE_REQUIRE_THROW( db->push_transaction( tx, 0 ), fc::exception );
+    HIVE_REQUIRE_THROW( push_transaction( tx, 0 ), fc::exception );
     const auto& owner2 = db->get< account_authority_object, by_account >("bob").owner;
     BOOST_REQUIRE( owner2 == authority( 1, generate_private_key( "new_key" ).get_public_key(), 1 ) );
 
@@ -4719,7 +4962,7 @@ BOOST_AUTO_TEST_CASE( account_recovery )
     tx.operations.push_back( recover );
     sign( tx, generate_private_key( "foo bar" ) );
     sign( tx, generate_private_key( "idontknow" ) );
-    HIVE_REQUIRE_THROW( db->push_transaction( tx, 0 ), fc::exception );
+    HIVE_REQUIRE_THROW( push_transaction( tx, 0 ), fc::exception );
     const auto& owner3 = db->get< account_authority_object, by_account >("bob").owner;
     BOOST_REQUIRE( owner3 == authority( 1, generate_private_key( "new_key" ).get_public_key(), 1 ) );
 
@@ -4735,7 +4978,7 @@ BOOST_AUTO_TEST_CASE( account_recovery )
     tx.operations.push_back( recover );
     sign( tx, generate_private_key( "bob_owner" ) );
     sign( tx, generate_private_key( "foo bar" ) );
-    db->push_transaction( tx, 0 );
+    push_transaction( tx, 0 );
 
     const auto& owner4 = db->get< account_authority_object, by_account >("bob").owner;
     BOOST_REQUIRE( owner4 == recover.new_owner_authority );
@@ -4749,7 +4992,7 @@ BOOST_AUTO_TEST_CASE( account_recovery )
 
     tx.operations.push_back( request );
     sign( tx, alice_private_key );
-    db->push_transaction( tx, 0 );
+    push_transaction( tx, 0 );
 
     const auto& request_idx = db->get_index< account_recovery_request_index >().indices();
     auto req_itr = request_idx.begin();
@@ -4780,7 +5023,7 @@ BOOST_AUTO_TEST_CASE( account_recovery )
     tx.set_expiration( db->head_block_time() );
     sign( tx, generate_private_key( "expire" ) );
     sign( tx, generate_private_key( "bob_owner" ) );
-    HIVE_REQUIRE_THROW( db->push_transaction( tx, 0 ), fc::exception );
+    HIVE_REQUIRE_THROW( push_transaction( tx, 0 ), fc::exception );
     const auto& owner5 = db->get< account_authority_object, by_account >("bob").owner;
     BOOST_REQUIRE( owner5 == authority( 1, generate_private_key( "foo bar" ).get_public_key(), 1 ) );
 
@@ -4794,7 +5037,7 @@ BOOST_AUTO_TEST_CASE( account_recovery )
     tx.operations.push_back( acc_update );
     tx.set_expiration( db->head_block_time() + HIVE_MAX_TIME_UNTIL_EXPIRATION );
     sign( tx, generate_private_key( "foo bar" ) );
-    db->push_transaction( tx, 0 );
+    push_transaction( tx, 0 );
 
     generate_blocks( db->head_block_time() + ( HIVE_OWNER_AUTH_RECOVERY_PERIOD - HIVE_ACCOUNT_RECOVERY_REQUEST_EXPIRATION_PERIOD ) );
     generate_block();
@@ -4807,7 +5050,7 @@ BOOST_AUTO_TEST_CASE( account_recovery )
     tx.operations.push_back( request );
     tx.set_expiration( db->head_block_time() + HIVE_MAX_TIME_UNTIL_EXPIRATION );
     sign( tx, alice_private_key );
-    db->push_transaction( tx, 0 );
+    push_transaction( tx, 0 );
 
     recover.new_owner_authority = request.new_owner_authority;
     recover.recent_owner_authority = authority( 1, generate_private_key( "bob_owner" ).get_public_key(), 1 );
@@ -4819,7 +5062,7 @@ BOOST_AUTO_TEST_CASE( account_recovery )
     tx.set_expiration( db->head_block_time() + HIVE_MAX_TIME_UNTIL_EXPIRATION );
     sign( tx, generate_private_key( "bob_owner" ) );
     sign( tx, generate_private_key( "last key" ) );
-    HIVE_REQUIRE_THROW( db->push_transaction( tx, 0 ), fc::exception );
+    HIVE_REQUIRE_THROW( push_transaction( tx, 0 ), fc::exception );
     const auto& owner6 = db->get< account_authority_object, by_account >("bob").owner;
     BOOST_REQUIRE( owner6 == authority( 1, generate_private_key( "new_key" ).get_public_key(), 1 ) );
 
@@ -4832,7 +5075,7 @@ BOOST_AUTO_TEST_CASE( account_recovery )
     tx.set_expiration( db->head_block_time() + HIVE_MAX_TIME_UNTIL_EXPIRATION );
     sign( tx, generate_private_key( "foo bar" ) );
     sign( tx, generate_private_key( "last key" ) );
-    db->push_transaction( tx, 0 );
+    push_transaction( tx, 0 );
     const auto& owner7 = db->get< account_authority_object, by_account >("bob").owner;
     BOOST_REQUIRE( owner7 == authority( 1, generate_private_key( "last key" ).get_public_key(), 1 ) );
   }
@@ -4857,7 +5100,7 @@ BOOST_AUTO_TEST_CASE( change_recovery_account )
       tx.operations.push_back( op );
       tx.set_expiration( db->head_block_time() + HIVE_MAX_TIME_UNTIL_EXPIRATION );
       sign( tx, alice_private_key );
-      db->push_transaction( tx, 0 );
+      push_transaction( tx, 0 );
     };
 
     auto recover_account = [&]( const std::string& account_to_recover, const fc::ecc::private_key& new_owner_key, const fc::ecc::private_key& recent_owner_key )
@@ -4872,14 +5115,14 @@ BOOST_AUTO_TEST_CASE( change_recovery_account )
       tx.set_expiration( db->head_block_time() + HIVE_MAX_TIME_UNTIL_EXPIRATION );
       sign( tx, recent_owner_key );
       // only Alice -> throw
-      HIVE_REQUIRE_THROW( db->push_transaction( tx, 0 ), fc::exception );
+      HIVE_REQUIRE_THROW( push_transaction( tx, 0 ), fc::exception );
       tx.signatures.clear();
       sign( tx, new_owner_key );
       // only Sam -> throw
-      HIVE_REQUIRE_THROW( db->push_transaction( tx, 0 ), fc::exception );
+      HIVE_REQUIRE_THROW( push_transaction( tx, 0 ), fc::exception );
       sign( tx, recent_owner_key );
       // Alice+Sam -> OK
-      db->push_transaction( tx, 0 );
+      push_transaction( tx, 0 );
     };
 
     auto request_account_recovery = [&]( const std::string& recovery_account, const fc::ecc::private_key& recovery_account_key, const std::string& account_to_recover, const public_key_type& new_owner_key )
@@ -4893,7 +5136,7 @@ BOOST_AUTO_TEST_CASE( change_recovery_account )
       tx.operations.push_back( op );
       tx.set_expiration( db->head_block_time() + HIVE_MAX_TIME_UNTIL_EXPIRATION );
       sign( tx, recovery_account_key );
-      db->push_transaction( tx, 0 );
+      push_transaction( tx, 0 );
     };
 
     auto change_owner = [&]( const std::string& account, const fc::ecc::private_key& old_private_key, const public_key_type& new_public_key )
@@ -4906,7 +5149,7 @@ BOOST_AUTO_TEST_CASE( change_recovery_account )
       tx.operations.push_back( op );
       tx.set_expiration( db->head_block_time() + HIVE_MAX_TIME_UNTIL_EXPIRATION );
       sign( tx, old_private_key );
-      db->push_transaction( tx, 0 );
+      push_transaction( tx, 0 );
     };
 
     // if either/both users do not exist, we shouldn't allow it
@@ -5066,7 +5309,7 @@ BOOST_AUTO_TEST_CASE( escrow_transfer_apply )
     tx.operations.push_back( op );
     tx.set_expiration( db->head_block_time() + HIVE_MAX_TIME_UNTIL_EXPIRATION );
     sign( tx, alice_private_key );
-    HIVE_REQUIRE_THROW( db->push_transaction( tx, 0 ), fc::exception );
+    HIVE_REQUIRE_THROW( push_transaction( tx, 0 ), fc::exception );
 
     BOOST_TEST_MESSAGE( "--- falure when from cannot cover amount + fee" );
     op.hbd_amount.amount = 0;
@@ -5075,7 +5318,7 @@ BOOST_AUTO_TEST_CASE( escrow_transfer_apply )
     tx.signatures.clear();
     tx.operations.push_back( op );
     sign( tx, alice_private_key );
-    HIVE_REQUIRE_THROW( db->push_transaction( tx, 0 ), fc::exception );
+    HIVE_REQUIRE_THROW( push_transaction( tx, 0 ), fc::exception );
 
     BOOST_TEST_MESSAGE( "--- failure when ratification deadline is in the past" );
     op.hive_amount.amount = 1000;
@@ -5084,7 +5327,7 @@ BOOST_AUTO_TEST_CASE( escrow_transfer_apply )
     tx.signatures.clear();
     tx.operations.push_back( op );
     sign( tx, alice_private_key );
-    HIVE_REQUIRE_THROW( db->push_transaction( tx, 0 ), fc::exception );
+    HIVE_REQUIRE_THROW( push_transaction( tx, 0 ), fc::exception );
 
     BOOST_TEST_MESSAGE( "--- failure when expiration is in the past" );
     op.escrow_expiration = db->head_block_time() - 100;
@@ -5092,7 +5335,7 @@ BOOST_AUTO_TEST_CASE( escrow_transfer_apply )
     tx.signatures.clear();
     tx.operations.push_back( op );
     sign( tx, alice_private_key );
-    HIVE_REQUIRE_THROW( db->push_transaction( tx, 0 ), fc::exception );
+    HIVE_REQUIRE_THROW( push_transaction( tx, 0 ), fc::exception );
 
     BOOST_TEST_MESSAGE( "--- success" );
     op.ratification_deadline = db->head_block_time() + 100;
@@ -5109,7 +5352,7 @@ BOOST_AUTO_TEST_CASE( escrow_transfer_apply )
     auto sam_hive_balance = sam.get_balance();
     auto sam_hbd_balance = sam.get_hbd_balance();
 
-    db->push_transaction( tx, 0 );
+    push_transaction( tx, 0 );
 
     const auto& escrow = db->get_escrow( op.from, op.escrow_id );
 
@@ -5228,7 +5471,7 @@ BOOST_AUTO_TEST_CASE( escrow_approve_apply )
     tx.operations.push_back( et_op );
     tx.set_expiration( db->head_block_time() + HIVE_MAX_TIME_UNTIL_EXPIRATION );
     sign( tx, alice_private_key );
-    db->push_transaction( tx, 0 );
+    push_transaction( tx, 0 );
     tx.operations.clear();
     tx.signatures.clear();
 
@@ -5243,7 +5486,7 @@ BOOST_AUTO_TEST_CASE( escrow_approve_apply )
 
     tx.operations.push_back( op );
     sign( tx, dave_private_key );
-    HIVE_REQUIRE_THROW( db->push_transaction( tx, 0 ), fc::exception );
+    HIVE_REQUIRE_THROW( push_transaction( tx, 0 ), fc::exception );
 
 
     BOOST_TEST_MESSAGE( "--- failure when agent does not match escrow" );
@@ -5255,7 +5498,7 @@ BOOST_AUTO_TEST_CASE( escrow_approve_apply )
 
     tx.operations.push_back( op );
     sign( tx, dave_private_key );
-    HIVE_REQUIRE_THROW( db->push_transaction( tx, 0 ), fc::exception );
+    HIVE_REQUIRE_THROW( push_transaction( tx, 0 ), fc::exception );
 
 
     BOOST_TEST_MESSAGE( "--- success approving to" );
@@ -5267,7 +5510,7 @@ BOOST_AUTO_TEST_CASE( escrow_approve_apply )
 
     tx.operations.push_back( op );
     sign( tx, bob_private_key );
-    db->push_transaction( tx, 0 );
+    push_transaction( tx, 0 );
 
     auto& escrow = db->get_escrow( op.from, op.escrow_id );
     BOOST_REQUIRE( escrow.to == "bob" );
@@ -5287,7 +5530,7 @@ BOOST_AUTO_TEST_CASE( escrow_approve_apply )
 
     tx.set_expiration( db->head_block_time() + HIVE_BLOCK_INTERVAL );
     sign( tx, bob_private_key );
-    HIVE_REQUIRE_THROW( db->push_transaction( tx, 0 ), fc::exception );
+    HIVE_REQUIRE_THROW( push_transaction( tx, 0 ), fc::exception );
 
     BOOST_REQUIRE( escrow.to == "bob" );
     BOOST_REQUIRE( escrow.agent == "sam" );
@@ -5309,7 +5552,7 @@ BOOST_AUTO_TEST_CASE( escrow_approve_apply )
 
     tx.operations.push_back( op );
     sign( tx, bob_private_key );
-    HIVE_REQUIRE_THROW( db->push_transaction( tx, 0 ), fc::exception );
+    HIVE_REQUIRE_THROW( push_transaction( tx, 0 ), fc::exception );
 
     BOOST_REQUIRE( escrow.to == "bob" );
     BOOST_REQUIRE( escrow.agent == "sam" );
@@ -5331,7 +5574,7 @@ BOOST_AUTO_TEST_CASE( escrow_approve_apply )
 
     tx.operations.push_back( op );
     sign( tx, sam_private_key );
-    db->push_transaction( tx, 0 );
+    push_transaction( tx, 0 );
 
     HIVE_REQUIRE_THROW( db->get_escrow( op.from, op.escrow_id ), fc::exception );
     BOOST_REQUIRE( alice.get_balance() == ASSET( "10.000 TESTS" ) );
@@ -5343,7 +5586,7 @@ BOOST_AUTO_TEST_CASE( escrow_approve_apply )
     tx.signatures.clear();
     tx.operations.push_back( et_op );
     sign( tx, alice_private_key );
-    db->push_transaction( tx, 0 );
+    push_transaction( tx, 0 );
 
     generate_blocks( et_op.ratification_deadline + HIVE_BLOCK_INTERVAL, true );
 
@@ -5360,7 +5603,7 @@ BOOST_AUTO_TEST_CASE( escrow_approve_apply )
     tx.operations.push_back( et_op );
     tx.set_expiration( db->head_block_time() + HIVE_MAX_TIME_UNTIL_EXPIRATION );
     sign( tx, alice_private_key );
-    db->push_transaction( tx, 0 );
+    push_transaction( tx, 0 );
 
     tx.operations.clear();
     tx.signatures.clear();
@@ -5368,7 +5611,7 @@ BOOST_AUTO_TEST_CASE( escrow_approve_apply )
     op.approve = true;
     tx.operations.push_back( op );
     sign( tx, bob_private_key );
-    db->push_transaction( tx, 0 );
+    push_transaction( tx, 0 );
 
     generate_blocks( et_op.ratification_deadline + HIVE_BLOCK_INTERVAL, true );
 
@@ -5385,14 +5628,14 @@ BOOST_AUTO_TEST_CASE( escrow_approve_apply )
     tx.operations.push_back( et_op );
     tx.set_expiration( db->head_block_time() + HIVE_MAX_TIME_UNTIL_EXPIRATION );
     sign( tx, alice_private_key );
-    db->push_transaction( tx, 0 );
+    push_transaction( tx, 0 );
 
     tx.operations.clear();
     tx.signatures.clear();
     op.who = op.agent;
     tx.operations.push_back( op );
     sign( tx, sam_private_key );
-    db->push_transaction( tx, 0 );
+    push_transaction( tx, 0 );
 
     generate_blocks( et_op.ratification_deadline + HIVE_BLOCK_INTERVAL, true );
 
@@ -5409,21 +5652,21 @@ BOOST_AUTO_TEST_CASE( escrow_approve_apply )
     tx.operations.push_back( et_op );
     tx.set_expiration( db->head_block_time() + HIVE_MAX_TIME_UNTIL_EXPIRATION );
     sign( tx, alice_private_key );
-    db->push_transaction( tx, 0 );
+    push_transaction( tx, 0 );
 
     tx.operations.clear();
     tx.signatures.clear();
     op.who = op.to;
     tx.operations.push_back( op );
     sign( tx, bob_private_key );
-    db->push_transaction( tx, 0 );
+    push_transaction( tx, 0 );
 
     tx.operations.clear();
     tx.signatures.clear();
     op.who = op.agent;
     tx.operations.push_back( op );
     sign( tx, sam_private_key );
-    db->push_transaction( tx, 0 );
+    push_transaction( tx, 0 );
 
     {
       const auto& escrow = db->get_escrow( op.from, op.escrow_id );
@@ -5555,7 +5798,7 @@ BOOST_AUTO_TEST_CASE( escrow_dispute_apply )
     tx.set_expiration( db->head_block_time() + HIVE_MAX_TIME_UNTIL_EXPIRATION );
     sign( tx, alice_private_key );
     sign( tx, bob_private_key );
-    db->push_transaction( tx, 0 );
+    push_transaction( tx, 0 );
 
 
     BOOST_TEST_MESSAGE( "--- failure when escrow has not been approved" );
@@ -5569,7 +5812,7 @@ BOOST_AUTO_TEST_CASE( escrow_dispute_apply )
     tx.signatures.clear();
     tx.operations.push_back( op );
     sign( tx, bob_private_key );
-    HIVE_REQUIRE_THROW( db->push_transaction( tx, 0 ), fc::exception );
+    HIVE_REQUIRE_THROW( push_transaction( tx, 0 ), fc::exception );
 
     const auto& escrow = db->get_escrow( et_op.from, et_op.escrow_id );
     BOOST_REQUIRE( escrow.to == "bob" );
@@ -5596,7 +5839,7 @@ BOOST_AUTO_TEST_CASE( escrow_dispute_apply )
     tx.signatures.clear();
     tx.operations.push_back( ea_s_op );
     sign( tx, sam_private_key );
-    db->push_transaction( tx, 0 );
+    push_transaction( tx, 0 );
 
     op.to = "dave";
     op.who = "alice";
@@ -5604,7 +5847,7 @@ BOOST_AUTO_TEST_CASE( escrow_dispute_apply )
     tx.signatures.clear();
     tx.operations.push_back( op );
     sign( tx, alice_private_key );
-    HIVE_REQUIRE_THROW( db->push_transaction( tx, 0 ), fc::exception );
+    HIVE_REQUIRE_THROW( push_transaction( tx, 0 ), fc::exception );
 
     BOOST_REQUIRE( escrow.to == "bob" );
     BOOST_REQUIRE( escrow.agent == "sam" );
@@ -5626,7 +5869,7 @@ BOOST_AUTO_TEST_CASE( escrow_dispute_apply )
     tx.signatures.clear();
     tx.operations.push_back( op );
     sign( tx, alice_private_key );
-    HIVE_REQUIRE_THROW( db->push_transaction( tx, 0 ), fc::exception );
+    HIVE_REQUIRE_THROW( push_transaction( tx, 0 ), fc::exception );
 
     BOOST_REQUIRE( escrow.to == "bob" );
     BOOST_REQUIRE( escrow.agent == "sam" );
@@ -5649,7 +5892,7 @@ BOOST_AUTO_TEST_CASE( escrow_dispute_apply )
     tx.operations.push_back( op );
     tx.set_expiration( db->head_block_time() + HIVE_MAX_TIME_UNTIL_EXPIRATION );
     sign( tx, alice_private_key );
-    HIVE_REQUIRE_THROW( db->push_transaction( tx, 0 ), fc::exception );
+    HIVE_REQUIRE_THROW( push_transaction( tx, 0 ), fc::exception );
 
     {
       const auto& escrow = db->get_escrow( et_op.from, et_op.escrow_id );
@@ -5681,14 +5924,14 @@ BOOST_AUTO_TEST_CASE( escrow_dispute_apply )
     sign( tx, alice_private_key );
     sign( tx, bob_private_key );
     sign( tx, sam_private_key );
-    db->push_transaction( tx, 0 );
+    push_transaction( tx, 0 );
 
     tx.operations.clear();
     tx.signatures.clear();
     op.escrow_id = et_op.escrow_id;
     tx.operations.push_back( op );
     sign( tx, alice_private_key );
-    db->push_transaction( tx, 0 );
+    push_transaction( tx, 0 );
 
     {
       const auto& escrow = db->get_escrow( et_op.from, et_op.escrow_id );
@@ -5711,7 +5954,7 @@ BOOST_AUTO_TEST_CASE( escrow_dispute_apply )
     op.who = "bob";
     tx.operations.push_back( op );
     sign( tx, bob_private_key );
-    HIVE_REQUIRE_THROW( db->push_transaction( tx, 0 ), fc::exception );
+    HIVE_REQUIRE_THROW( push_transaction( tx, 0 ), fc::exception );
 
     {
       const auto& escrow = db->get_escrow( et_op.from, et_op.escrow_id );
@@ -5840,7 +6083,7 @@ BOOST_AUTO_TEST_CASE( escrow_release_apply )
 
     tx.set_expiration( db->head_block_time() + HIVE_MAX_TIME_UNTIL_EXPIRATION );
     sign( tx, alice_private_key );
-    db->push_transaction( tx, 0 );
+    push_transaction( tx, 0 );
 
 
     BOOST_TEST_MESSAGE( "--- failure releasing funds prior to approval" );
@@ -5855,7 +6098,7 @@ BOOST_AUTO_TEST_CASE( escrow_release_apply )
     tx.clear();
     tx.operations.push_back( op );
     sign( tx, alice_private_key );
-    HIVE_REQUIRE_THROW( db->push_transaction( tx, 0 ), fc::exception );
+    HIVE_REQUIRE_THROW( push_transaction( tx, 0 ), fc::exception );
 
     escrow_approve_operation ea_b_op;
     ea_b_op.from = "alice";
@@ -5874,14 +6117,14 @@ BOOST_AUTO_TEST_CASE( escrow_release_apply )
     tx.operations.push_back( ea_s_op );
     sign( tx, bob_private_key );
     sign( tx, sam_private_key );
-    db->push_transaction( tx, 0 );
+    push_transaction( tx, 0 );
 
     BOOST_TEST_MESSAGE( "--- failure when 'agent' attempts to release non-disputed escrow to 'to'" );
     op.who = et_op.agent;
     tx.clear();
     tx.operations.push_back( op );
     sign( tx, sam_private_key );
-    HIVE_REQUIRE_THROW( db->push_transaction( tx, 0 ), fc::exception );
+    HIVE_REQUIRE_THROW( push_transaction( tx, 0 ), fc::exception );
 
 
     BOOST_TEST_MESSAGE("--- failure when 'agent' attempts to release non-disputed escrow to 'from' " );
@@ -5890,7 +6133,7 @@ BOOST_AUTO_TEST_CASE( escrow_release_apply )
     tx.clear();
     tx.operations.push_back( op );
     sign( tx, sam_private_key );
-    HIVE_REQUIRE_THROW( db->push_transaction( tx, 0 ), fc::exception );
+    HIVE_REQUIRE_THROW( push_transaction( tx, 0 ), fc::exception );
 
 
     BOOST_TEST_MESSAGE( "--- failure when 'agent' attempt to release non-disputed escrow to not 'to' or 'from'" );
@@ -5899,7 +6142,7 @@ BOOST_AUTO_TEST_CASE( escrow_release_apply )
     tx.clear();
     tx.operations.push_back( op );
     sign( tx, sam_private_key );
-    HIVE_REQUIRE_THROW( db->push_transaction( tx, 0 ), fc::exception );
+    HIVE_REQUIRE_THROW( push_transaction( tx, 0 ), fc::exception );
 
 
     BOOST_TEST_MESSAGE( "--- failure when other attempts to release non-disputed escrow to 'to'" );
@@ -5909,7 +6152,7 @@ BOOST_AUTO_TEST_CASE( escrow_release_apply )
     tx.clear();
     tx.operations.push_back( op );
     sign( tx, dave_private_key );
-    HIVE_REQUIRE_THROW( db->push_transaction( tx, 0 ), fc::exception );
+    HIVE_REQUIRE_THROW( push_transaction( tx, 0 ), fc::exception );
 
 
     BOOST_TEST_MESSAGE("--- failure when other attempts to release non-disputed escrow to 'from' " );
@@ -5918,7 +6161,7 @@ BOOST_AUTO_TEST_CASE( escrow_release_apply )
     tx.clear();
     tx.operations.push_back( op );
     sign( tx, dave_private_key );
-    HIVE_REQUIRE_THROW( db->push_transaction( tx, 0 ), fc::exception );
+    HIVE_REQUIRE_THROW( push_transaction( tx, 0 ), fc::exception );
 
 
     BOOST_TEST_MESSAGE( "--- failure when other attempt to release non-disputed escrow to not 'to' or 'from'" );
@@ -5927,7 +6170,7 @@ BOOST_AUTO_TEST_CASE( escrow_release_apply )
     tx.clear();
     tx.operations.push_back( op );
     sign( tx, dave_private_key );
-    HIVE_REQUIRE_THROW( db->push_transaction( tx, 0 ), fc::exception );
+    HIVE_REQUIRE_THROW( push_transaction( tx, 0 ), fc::exception );
 
 
     BOOST_TEST_MESSAGE( "--- failure when 'to' attemtps to release non-disputed escrow to 'to'" );
@@ -5937,7 +6180,7 @@ BOOST_AUTO_TEST_CASE( escrow_release_apply )
     tx.clear();
     tx.operations.push_back( op );
     sign( tx, bob_private_key );
-    HIVE_REQUIRE_THROW( db->push_transaction( tx, 0 ), fc::exception );
+    HIVE_REQUIRE_THROW( push_transaction( tx, 0 ), fc::exception );
 
 
     BOOST_TEST_MESSAGE("--- failure when 'to' attempts to release non-dispured escrow to 'agent' " );
@@ -5946,7 +6189,7 @@ BOOST_AUTO_TEST_CASE( escrow_release_apply )
     tx.clear();
     tx.operations.push_back( op );
     sign( tx, bob_private_key );
-    HIVE_REQUIRE_THROW( db->push_transaction( tx, 0 ), fc::exception );
+    HIVE_REQUIRE_THROW( push_transaction( tx, 0 ), fc::exception );
 
 
     BOOST_TEST_MESSAGE( "--- failure when 'to' attempts to release non-disputed escrow to not 'from'" );
@@ -5955,7 +6198,7 @@ BOOST_AUTO_TEST_CASE( escrow_release_apply )
     tx.clear();
     tx.operations.push_back( op );
     sign( tx, bob_private_key );
-    HIVE_REQUIRE_THROW( db->push_transaction( tx, 0 ), fc::exception );
+    HIVE_REQUIRE_THROW( push_transaction( tx, 0 ), fc::exception );
 
 
     BOOST_TEST_MESSAGE( "--- success release non-disputed escrow to 'to' from 'from'" );
@@ -5964,7 +6207,7 @@ BOOST_AUTO_TEST_CASE( escrow_release_apply )
     tx.clear();
     tx.operations.push_back( op );
     sign( tx, bob_private_key );
-    db->push_transaction( tx, 0 );
+    push_transaction( tx, 0 );
 
     BOOST_REQUIRE( db->get_escrow( op.from, op.escrow_id ).get_hive_balance() == ASSET( "0.900 TESTS" ) );
     BOOST_REQUIRE( get_balance( "alice" ) == ASSET( "9.000 TESTS" ) );
@@ -5977,7 +6220,7 @@ BOOST_AUTO_TEST_CASE( escrow_release_apply )
     tx.clear();
     tx.operations.push_back( op );
     sign( tx, alice_private_key );
-    HIVE_REQUIRE_THROW( db->push_transaction( tx, 0 ), fc::exception );
+    HIVE_REQUIRE_THROW( push_transaction( tx, 0 ), fc::exception );
 
 
     BOOST_TEST_MESSAGE("--- failure when 'from' attempts to release non-disputed escrow to 'agent'" );
@@ -5986,7 +6229,7 @@ BOOST_AUTO_TEST_CASE( escrow_release_apply )
     tx.clear();
     tx.operations.push_back( op );
     sign( tx, alice_private_key );
-    HIVE_REQUIRE_THROW( db->push_transaction( tx, 0 ), fc::exception );
+    HIVE_REQUIRE_THROW( push_transaction( tx, 0 ), fc::exception );
 
 
     BOOST_TEST_MESSAGE( "--- failure when 'from' attempts to release non-disputed escrow to not 'from'" );
@@ -5995,7 +6238,7 @@ BOOST_AUTO_TEST_CASE( escrow_release_apply )
     tx.clear();
     tx.operations.push_back( op );
     sign( tx, alice_private_key );
-    HIVE_REQUIRE_THROW( db->push_transaction( tx, 0 ), fc::exception );
+    HIVE_REQUIRE_THROW( push_transaction( tx, 0 ), fc::exception );
 
 
     BOOST_TEST_MESSAGE( "--- success release non-disputed escrow to 'from' from 'to'" );
@@ -6004,7 +6247,7 @@ BOOST_AUTO_TEST_CASE( escrow_release_apply )
     tx.clear();
     tx.operations.push_back( op );
     sign( tx, alice_private_key );
-    db->push_transaction( tx, 0 );
+    push_transaction( tx, 0 );
 
     BOOST_REQUIRE( db->get_escrow( op.from, op.escrow_id ).get_hive_balance() == ASSET( "0.800 TESTS" ) );
     BOOST_REQUIRE( get_balance( "bob" ) == ASSET( "0.100 TESTS" ) );
@@ -6016,7 +6259,7 @@ BOOST_AUTO_TEST_CASE( escrow_release_apply )
     tx.clear();
     tx.operations.push_back( op );
     sign( tx, alice_private_key );
-    HIVE_REQUIRE_THROW( db->push_transaction( tx, 0 ), fc::exception );
+    HIVE_REQUIRE_THROW( push_transaction( tx, 0 ), fc::exception );
 
 
     BOOST_TEST_MESSAGE( "--- failure when releasing less hive than available" );
@@ -6026,7 +6269,7 @@ BOOST_AUTO_TEST_CASE( escrow_release_apply )
     tx.clear();
     tx.operations.push_back( op );
     sign( tx, alice_private_key );
-    HIVE_REQUIRE_THROW( db->push_transaction( tx, 0 ), fc::exception );
+    HIVE_REQUIRE_THROW( push_transaction( tx, 0 ), fc::exception );
 
 
     BOOST_TEST_MESSAGE( "--- failure when 'to' attempts to release disputed escrow" );
@@ -6039,7 +6282,7 @@ BOOST_AUTO_TEST_CASE( escrow_release_apply )
     tx.clear();
     tx.operations.push_back( ed_op );
     sign( tx, alice_private_key );
-    db->push_transaction( tx, 0 );
+    push_transaction( tx, 0 );
 
     tx.clear();
     op.from = et_op.from;
@@ -6049,7 +6292,7 @@ BOOST_AUTO_TEST_CASE( escrow_release_apply )
     op.hbd_amount = ASSET( "0.000 TBD" );
     tx.operations.push_back( op );
     sign( tx, bob_private_key );
-    HIVE_REQUIRE_THROW( db->push_transaction( tx, 0 ), fc::exception );
+    HIVE_REQUIRE_THROW( push_transaction( tx, 0 ), fc::exception );
 
 
     BOOST_TEST_MESSAGE( "--- failure when 'from' attempts to release disputed escrow" );
@@ -6058,7 +6301,7 @@ BOOST_AUTO_TEST_CASE( escrow_release_apply )
     op.who = et_op.from;
     tx.operations.push_back( op );
     sign( tx, alice_private_key );
-    HIVE_REQUIRE_THROW( db->push_transaction( tx, 0 ), fc::exception );
+    HIVE_REQUIRE_THROW( push_transaction( tx, 0 ), fc::exception );
 
 
     BOOST_TEST_MESSAGE( "--- failure when releasing disputed escrow to an account not 'to' or 'from'" );
@@ -6067,7 +6310,7 @@ BOOST_AUTO_TEST_CASE( escrow_release_apply )
     op.receiver = "dave";
     tx.operations.push_back( op );
     sign( tx, sam_private_key );
-    HIVE_REQUIRE_THROW( db->push_transaction( tx, 0 ), fc::exception );
+    HIVE_REQUIRE_THROW( push_transaction( tx, 0 ), fc::exception );
 
 
     BOOST_TEST_MESSAGE( "--- failure when agent does not match escrow" );
@@ -6076,7 +6319,7 @@ BOOST_AUTO_TEST_CASE( escrow_release_apply )
     op.receiver = et_op.from;
     tx.operations.push_back( op );
     sign( tx, dave_private_key );
-    HIVE_REQUIRE_THROW( db->push_transaction( tx, 0 ), fc::exception );
+    HIVE_REQUIRE_THROW( push_transaction( tx, 0 ), fc::exception );
 
 
     BOOST_TEST_MESSAGE( "--- success releasing disputed escrow with agent to 'to'" );
@@ -6085,7 +6328,7 @@ BOOST_AUTO_TEST_CASE( escrow_release_apply )
     op.who = et_op.agent;
     tx.operations.push_back( op );
     sign( tx, sam_private_key );
-    db->push_transaction( tx, 0 );
+    push_transaction( tx, 0 );
 
     BOOST_REQUIRE( get_balance( "bob" ) == ASSET( "0.200 TESTS" ) );
     BOOST_REQUIRE( db->get_escrow( et_op.from, et_op.escrow_id ).get_hive_balance() == ASSET( "0.700 TESTS" ) );
@@ -6097,7 +6340,7 @@ BOOST_AUTO_TEST_CASE( escrow_release_apply )
     op.who = et_op.agent;
     tx.operations.push_back( op );
     sign( tx, sam_private_key );
-    db->push_transaction( tx, 0 );
+    push_transaction( tx, 0 );
 
     BOOST_REQUIRE( get_balance( "alice" ) == ASSET( "9.100 TESTS" ) );
     BOOST_REQUIRE( db->get_escrow( et_op.from, et_op.escrow_id ).get_hive_balance() == ASSET( "0.600 TESTS" ) );
@@ -6112,7 +6355,7 @@ BOOST_AUTO_TEST_CASE( escrow_release_apply )
     tx.operations.push_back( op );
     tx.set_expiration( db->head_block_time() + HIVE_MAX_TIME_UNTIL_EXPIRATION );
     sign( tx, bob_private_key );
-    HIVE_REQUIRE_THROW( db->push_transaction( tx, 0 ), fc::exception );
+    HIVE_REQUIRE_THROW( push_transaction( tx, 0 ), fc::exception );
 
 
     BOOST_TEST_MESSAGE( "--- failure when 'from' attempts to release disputed expired escrow" );
@@ -6121,7 +6364,7 @@ BOOST_AUTO_TEST_CASE( escrow_release_apply )
     op.who = et_op.from;
     tx.operations.push_back( op );
     sign( tx, alice_private_key );
-    HIVE_REQUIRE_THROW( db->push_transaction( tx, 0 ), fc::exception );
+    HIVE_REQUIRE_THROW( push_transaction( tx, 0 ), fc::exception );
 
 
     BOOST_TEST_MESSAGE( "--- success releasing disputed expired escrow with agent" );
@@ -6130,7 +6373,7 @@ BOOST_AUTO_TEST_CASE( escrow_release_apply )
     op.who = et_op.agent;
     tx.operations.push_back( op );
     sign( tx, sam_private_key );
-    db->push_transaction( tx, 0 );
+    push_transaction( tx, 0 );
 
     BOOST_REQUIRE( get_balance( "alice" ) == ASSET( "9.200 TESTS" ) );
     BOOST_REQUIRE( db->get_escrow( et_op.from, et_op.escrow_id ).get_hive_balance() == ASSET( "0.500 TESTS" ) );
@@ -6141,7 +6384,7 @@ BOOST_AUTO_TEST_CASE( escrow_release_apply )
     op.hive_amount = ASSET( "0.500 TESTS" );
     tx.operations.push_back( op );
     sign( tx, sam_private_key );
-    db->push_transaction( tx, 0 );
+    push_transaction( tx, 0 );
 
     BOOST_REQUIRE( get_balance( "alice" ) == ASSET( "9.700 TESTS" ) );
     HIVE_REQUIRE_THROW( db->get_escrow( et_op.from, et_op.escrow_id ), fc::exception );
@@ -6157,7 +6400,7 @@ BOOST_AUTO_TEST_CASE( escrow_release_apply )
     sign( tx, alice_private_key );
     sign( tx, bob_private_key );
     sign( tx, sam_private_key );
-    db->push_transaction( tx, 0 );
+    push_transaction( tx, 0 );
     generate_blocks( 2 );
 
 
@@ -6168,7 +6411,7 @@ BOOST_AUTO_TEST_CASE( escrow_release_apply )
     op.hive_amount = ASSET( "0.100 TESTS" );
     tx.operations.push_back( op );
     sign( tx, sam_private_key );
-    HIVE_REQUIRE_THROW( db->push_transaction( tx, 0 ), fc::exception );
+    HIVE_REQUIRE_THROW( push_transaction( tx, 0 ), fc::exception );
 
 
     BOOST_TEST_MESSAGE( "--- failure when 'agent' attempts to release non-disputed expired escrow to 'from'" );
@@ -6176,7 +6419,7 @@ BOOST_AUTO_TEST_CASE( escrow_release_apply )
     op.receiver = et_op.from;
     tx.operations.push_back( op );
     sign( tx, sam_private_key );
-    HIVE_REQUIRE_THROW( db->push_transaction( tx, 0 ), fc::exception );
+    HIVE_REQUIRE_THROW( push_transaction( tx, 0 ), fc::exception );
 
 
     BOOST_TEST_MESSAGE( "--- failure when 'agent' attempt to release non-disputed expired escrow to not 'to' or 'from'" );
@@ -6184,7 +6427,7 @@ BOOST_AUTO_TEST_CASE( escrow_release_apply )
     op.receiver = "dave";
     tx.operations.push_back( op );
     sign( tx, sam_private_key );
-    HIVE_REQUIRE_THROW( db->push_transaction( tx, 0 ), fc::exception );
+    HIVE_REQUIRE_THROW( push_transaction( tx, 0 ), fc::exception );
 
 
     BOOST_TEST_MESSAGE( "--- failure when 'to' attempts to release non-dispured expired escrow to 'agent'" );
@@ -6193,7 +6436,7 @@ BOOST_AUTO_TEST_CASE( escrow_release_apply )
     op.receiver = et_op.agent;
     tx.operations.push_back( op );
     sign( tx, bob_private_key );
-    HIVE_REQUIRE_THROW( db->push_transaction( tx, 0 ), fc::exception );
+    HIVE_REQUIRE_THROW( push_transaction( tx, 0 ), fc::exception );
 
 
     BOOST_TEST_MESSAGE( "--- failure when 'to' attempts to release non-disputed expired escrow to not 'from' or 'to'" );
@@ -6201,7 +6444,7 @@ BOOST_AUTO_TEST_CASE( escrow_release_apply )
     op.receiver = "dave";
     tx.operations.push_back( op );
     sign( tx, bob_private_key );
-    HIVE_REQUIRE_THROW( db->push_transaction( tx, 0 ), fc::exception );
+    HIVE_REQUIRE_THROW( push_transaction( tx, 0 ), fc::exception );
 
 
     BOOST_TEST_MESSAGE( "--- success release non-disputed expired escrow to 'to' from 'to'" );
@@ -6209,7 +6452,7 @@ BOOST_AUTO_TEST_CASE( escrow_release_apply )
     op.receiver = et_op.to;
     tx.operations.push_back( op );
     sign( tx, bob_private_key );
-    db->push_transaction( tx, 0 );
+    push_transaction( tx, 0 );
 
     BOOST_REQUIRE( get_balance( "bob" ) == ASSET( "0.300 TESTS" ) );
     BOOST_REQUIRE( db->get_escrow( et_op.from, et_op.escrow_id ).get_hive_balance() == ASSET( "0.900 TESTS" ) );
@@ -6220,7 +6463,7 @@ BOOST_AUTO_TEST_CASE( escrow_release_apply )
     op.receiver = et_op.from;
     tx.operations.push_back( op );
     sign( tx, bob_private_key );
-    db->push_transaction( tx, 0 );
+    push_transaction( tx, 0 );
 
     BOOST_REQUIRE( get_balance( "alice" ) == ASSET( "8.700 TESTS" ) );
     BOOST_REQUIRE( db->get_escrow( et_op.from, et_op.escrow_id ).get_hive_balance() == ASSET( "0.800 TESTS" ) );
@@ -6232,7 +6475,7 @@ BOOST_AUTO_TEST_CASE( escrow_release_apply )
     op.receiver = et_op.agent;
     tx.operations.push_back( op );
     sign( tx, alice_private_key );
-    HIVE_REQUIRE_THROW( db->push_transaction( tx, 0 ), fc::exception );
+    HIVE_REQUIRE_THROW( push_transaction( tx, 0 ), fc::exception );
 
 
     BOOST_TEST_MESSAGE( "--- failure when 'from' attempts to release non-disputed expired escrow to not 'from' or 'to'" );
@@ -6240,7 +6483,7 @@ BOOST_AUTO_TEST_CASE( escrow_release_apply )
     op.receiver = "dave";
     tx.operations.push_back( op );
     sign( tx, alice_private_key );
-    HIVE_REQUIRE_THROW( db->push_transaction( tx, 0 ), fc::exception );
+    HIVE_REQUIRE_THROW( push_transaction( tx, 0 ), fc::exception );
 
 
     BOOST_TEST_MESSAGE( "--- success release non-disputed expired escrow to 'to' from 'from'" );
@@ -6248,7 +6491,7 @@ BOOST_AUTO_TEST_CASE( escrow_release_apply )
     op.receiver = et_op.to;
     tx.operations.push_back( op );
     sign( tx, alice_private_key );
-    db->push_transaction( tx, 0 );
+    push_transaction( tx, 0 );
 
     BOOST_REQUIRE( get_balance( "bob" ) == ASSET( "0.400 TESTS" ) );
     BOOST_REQUIRE( db->get_escrow( et_op.from, et_op.escrow_id ).get_hive_balance() == ASSET( "0.700 TESTS" ) );
@@ -6259,7 +6502,7 @@ BOOST_AUTO_TEST_CASE( escrow_release_apply )
     op.receiver = et_op.from;
     tx.operations.push_back( op );
     sign( tx, alice_private_key );
-    db->push_transaction( tx, 0 );
+    push_transaction( tx, 0 );
 
     BOOST_REQUIRE( get_balance( "alice" ) == ASSET( "8.800 TESTS" ) );
     BOOST_REQUIRE( db->get_escrow( et_op.from, et_op.escrow_id ).get_hive_balance() == ASSET( "0.600 TESTS" ) );
@@ -6270,7 +6513,7 @@ BOOST_AUTO_TEST_CASE( escrow_release_apply )
     op.hive_amount = ASSET( "0.600 TESTS" );
     tx.operations.push_back( op );
     sign( tx, alice_private_key );
-    db->push_transaction( tx, 0 );
+    push_transaction( tx, 0 );
 
     BOOST_REQUIRE( get_balance( "alice" ) == ASSET( "9.400 TESTS" ) );
     HIVE_REQUIRE_THROW( db->get_escrow( et_op.from, et_op.escrow_id ), fc::exception );
@@ -6306,7 +6549,7 @@ BOOST_AUTO_TEST_CASE( escrow_limit )
       tx.operations.push_back( op );
       tx.set_expiration( db->head_block_time() + HIVE_MAX_TIME_UNTIL_EXPIRATION );
       sign( tx, alice_private_key );
-      db->push_transaction( tx, 0 );
+      push_transaction( tx, 0 );
 
       generate_block();
       BOOST_REQUIRE_EQUAL( db->get_account( "alice" ).pending_transfers, i + 1 );
@@ -6319,7 +6562,7 @@ BOOST_AUTO_TEST_CASE( escrow_limit )
       tx.operations.push_back( op );
       tx.set_expiration( db->head_block_time() + HIVE_MAX_TIME_UNTIL_EXPIRATION );
       sign( tx, alice_private_key );
-      HIVE_REQUIRE_THROW( db->push_transaction( tx, 0 ), fc::exception );
+      HIVE_REQUIRE_THROW( push_transaction( tx, 0 ), fc::exception );
 
       generate_block();
       BOOST_REQUIRE_EQUAL( db->get_account( "alice" ).pending_transfers, i );
@@ -6357,7 +6600,7 @@ BOOST_AUTO_TEST_CASE( escrow_limit )
         tx.operations.push_back( bob_approve );
         tx.set_expiration( db->head_block_time() + HIVE_MAX_TIME_UNTIL_EXPIRATION );
         sign( tx, bob_private_key );
-        db->push_transaction( tx, 0 );
+        push_transaction( tx, 0 );
       }
 
       if( !bob_approve.approve )
@@ -6370,7 +6613,7 @@ BOOST_AUTO_TEST_CASE( escrow_limit )
         tx.operations.push_back( sam_approve );
         tx.set_expiration( db->head_block_time() + HIVE_MAX_TIME_UNTIL_EXPIRATION );
         sign( tx, sam_private_key );
-        db->push_transaction( tx, 0 );
+        push_transaction( tx, 0 );
         if( !sam_approve.approve )
           ++declined;
       }
@@ -6428,7 +6671,7 @@ BOOST_AUTO_TEST_CASE( escrow_limit )
         break;
       }
 
-      db->push_transaction( tx, 0 );
+      push_transaction( tx, 0 );
       generate_block();
       BOOST_REQUIRE_EQUAL( db->get_account( "alice" ).pending_transfers, HIVE_MAX_PENDING_TRANSFERS - declined - expired - released );
     }
@@ -6453,7 +6696,7 @@ BOOST_AUTO_TEST_CASE( escrow_limit )
         tx.operations.push_back( alice_release );
 
       sign( tx, sam_private_key );
-      db->push_transaction( tx, 0 );
+      push_transaction( tx, 0 );
       --remaining;
 
       generate_block();
@@ -6573,7 +6816,7 @@ BOOST_AUTO_TEST_CASE( transfer_to_savings_apply )
     tx.operations.push_back( op );
     tx.set_expiration( db->head_block_time() + HIVE_MAX_TIME_UNTIL_EXPIRATION );
     sign( tx, alice_private_key );
-    HIVE_REQUIRE_THROW( db->push_transaction( tx, 0 ), fc::exception );
+    HIVE_REQUIRE_THROW( push_transaction( tx, 0 ), fc::exception );
     validate_database();
 
 
@@ -6584,7 +6827,7 @@ BOOST_AUTO_TEST_CASE( transfer_to_savings_apply )
     tx.clear();
     tx.operations.push_back( op );
     sign( tx, alice_private_key );
-    HIVE_REQUIRE_THROW( db->push_transaction( tx, 0 ), fc::exception );
+    HIVE_REQUIRE_THROW( push_transaction( tx, 0 ), fc::exception );
     validate_database();
 
     BOOST_TEST_MESSAGE( "--- Failure when transferring to treasury" );
@@ -6593,14 +6836,14 @@ BOOST_AUTO_TEST_CASE( transfer_to_savings_apply )
     tx.clear();
     tx.operations.push_back( op );
     sign( tx, alice_private_key );
-    HIVE_REQUIRE_THROW( db->push_transaction( tx, 0 ), fc::exception );
+    HIVE_REQUIRE_THROW( push_transaction( tx, 0 ), fc::exception );
     validate_database();
 
     op.amount = ASSET( "1.000 TBD" );
     tx.clear();
     tx.operations.push_back( op );
     sign( tx, alice_private_key );
-    HIVE_REQUIRE_THROW( db->push_transaction( tx, 0 ), fc::exception );
+    HIVE_REQUIRE_THROW( push_transaction( tx, 0 ), fc::exception );
     validate_database();
 
 
@@ -6611,7 +6854,7 @@ BOOST_AUTO_TEST_CASE( transfer_to_savings_apply )
     tx.clear();
     tx.operations.push_back( op );
     sign( tx, alice_private_key );
-    db->push_transaction( tx, 0 );
+    push_transaction( tx, 0 );
 
     BOOST_REQUIRE( get_balance( "alice" ) == ASSET( "9.000 TESTS" ) );
     BOOST_REQUIRE( get_savings( "alice" ) == ASSET( "1.000 TESTS" ) );
@@ -6624,7 +6867,7 @@ BOOST_AUTO_TEST_CASE( transfer_to_savings_apply )
     tx.clear();
     tx.operations.push_back( op );
     sign( tx, alice_private_key );
-    db->push_transaction( tx, 0 );
+    push_transaction( tx, 0 );
 
     BOOST_REQUIRE( get_hbd_balance( "alice" ) == ASSET( "9.000 TBD" ) );
     BOOST_REQUIRE( get_hbd_savings( "alice" ) == ASSET( "1.000 TBD" ) );
@@ -6638,7 +6881,7 @@ BOOST_AUTO_TEST_CASE( transfer_to_savings_apply )
     tx.clear();
     tx.operations.push_back( op );
     sign( tx, alice_private_key );
-    db->push_transaction( tx, 0 );
+    push_transaction( tx, 0 );
 
     BOOST_REQUIRE( get_balance( "alice" ) == ASSET( "8.000 TESTS" ) );
     BOOST_REQUIRE( get_savings( "bob" ) == ASSET( "1.000 TESTS" ) );
@@ -6651,7 +6894,7 @@ BOOST_AUTO_TEST_CASE( transfer_to_savings_apply )
     tx.clear();
     tx.operations.push_back( op );
     sign( tx, alice_private_key );
-    db->push_transaction( tx, 0 );
+    push_transaction( tx, 0 );
 
     BOOST_REQUIRE( get_hbd_balance( "alice" ) == ASSET( "8.000 TBD" ) );
     BOOST_REQUIRE( get_hbd_savings( "bob" ) == ASSET( "1.000 TBD" ) );
@@ -6762,13 +7005,13 @@ BOOST_AUTO_TEST_CASE( transfer_from_savings_apply )
     tx.operations.push_back( save );
     tx.set_expiration( db->head_block_time() + HIVE_MAX_TIME_UNTIL_EXPIRATION );
     sign( tx, alice_private_key );
-    db->push_transaction( tx, 0 );
+    push_transaction( tx, 0 );
 
     save.amount = ASSET( "10.000 TBD" );
     tx.clear();
     tx.operations.push_back( save );
     sign( tx, alice_private_key );
-    db->push_transaction( tx, 0 );
+    push_transaction( tx, 0 );
 
 
     BOOST_TEST_MESSAGE( "--- failure when account has insufficient funds" );
@@ -6781,7 +7024,7 @@ BOOST_AUTO_TEST_CASE( transfer_from_savings_apply )
     tx.clear();
     tx.operations.push_back( op );
     sign( tx, alice_private_key );
-    HIVE_REQUIRE_THROW( db->push_transaction( tx, 0 ), fc::exception );
+    HIVE_REQUIRE_THROW( push_transaction( tx, 0 ), fc::exception );
 
 
     BOOST_TEST_MESSAGE( "--- failure withdrawing to non-existant account" );
@@ -6791,7 +7034,7 @@ BOOST_AUTO_TEST_CASE( transfer_from_savings_apply )
     tx.clear();
     tx.operations.push_back( op );
     sign( tx, alice_private_key );
-    HIVE_REQUIRE_THROW( db->push_transaction( tx, 0 ), fc::exception );
+    HIVE_REQUIRE_THROW( push_transaction( tx, 0 ), fc::exception );
 
     BOOST_TEST_MESSAGE( "--- Failure withdrawing TESTS to treasury" );
 
@@ -6800,7 +7043,7 @@ BOOST_AUTO_TEST_CASE( transfer_from_savings_apply )
     tx.clear();
     tx.operations.push_back( op );
     sign( tx, alice_private_key );
-    HIVE_REQUIRE_THROW( db->push_transaction( tx, 0 ), fc::exception );
+    HIVE_REQUIRE_THROW( push_transaction( tx, 0 ), fc::exception );
     validate_database();
 
     BOOST_TEST_MESSAGE( "--- Success withdrawing TBD to treasury" );
@@ -6810,7 +7053,7 @@ BOOST_AUTO_TEST_CASE( transfer_from_savings_apply )
     tx.clear();
     tx.operations.push_back( op );
     sign( tx, alice_private_key );
-    db->push_transaction( tx, 0 );
+    push_transaction( tx, 0 );
     BOOST_REQUIRE( get_hbd_savings( "alice" ) == ASSET( "9.000 TBD" ) );
     validate_database();
 
@@ -6822,7 +7065,7 @@ BOOST_AUTO_TEST_CASE( transfer_from_savings_apply )
     tx.clear();
     tx.operations.push_back( op );
     sign( tx, alice_private_key );
-    db->push_transaction( tx, 0 );
+    push_transaction( tx, 0 );
 
     BOOST_REQUIRE( get_balance( "alice" ) == ASSET( "0.000 TESTS" ) );
     BOOST_REQUIRE( get_savings( "alice" ) == ASSET( "9.000 TESTS" ) );
@@ -6843,7 +7086,7 @@ BOOST_AUTO_TEST_CASE( transfer_from_savings_apply )
     tx.clear();
     tx.operations.push_back( op );
     sign( tx, alice_private_key );
-    db->push_transaction( tx, 0 );
+    push_transaction( tx, 0 );
 
     BOOST_REQUIRE( get_hbd_balance( "alice" ) == ASSET( "0.000 TBD" ) );
     BOOST_REQUIRE( get_hbd_savings( "alice" ) == ASSET( "8.000 TBD" ) );
@@ -6863,7 +7106,7 @@ BOOST_AUTO_TEST_CASE( transfer_from_savings_apply )
     tx.clear();
     tx.operations.push_back( op );
     sign( tx, alice_private_key );
-    HIVE_REQUIRE_THROW( db->push_transaction( tx, 0 ), fc::exception );
+    HIVE_REQUIRE_THROW( push_transaction( tx, 0 ), fc::exception );
 
 
     BOOST_TEST_MESSAGE( "--- success withdrawing HIVE to other" );
@@ -6874,7 +7117,7 @@ BOOST_AUTO_TEST_CASE( transfer_from_savings_apply )
     tx.clear();
     tx.operations.push_back( op );
     sign( tx, alice_private_key );
-    db->push_transaction( tx, 0 );
+    push_transaction( tx, 0 );
 
     BOOST_REQUIRE( get_balance( "alice" ) == ASSET( "0.000 TESTS" ) );
     BOOST_REQUIRE( get_savings( "alice" ) == ASSET( "8.000 TESTS" ) );
@@ -6895,7 +7138,7 @@ BOOST_AUTO_TEST_CASE( transfer_from_savings_apply )
     tx.clear();
     tx.operations.push_back( op );
     sign( tx, alice_private_key );
-    db->push_transaction( tx, 0 );
+    push_transaction( tx, 0 );
 
     BOOST_REQUIRE( get_hbd_balance( "alice" ) == ASSET( "0.000 TBD" ) );
     BOOST_REQUIRE( get_hbd_savings( "alice" ) == ASSET( "7.000 TBD" ) );
@@ -6940,7 +7183,7 @@ BOOST_AUTO_TEST_CASE( transfer_from_savings_apply )
       tx.clear();
       tx.operations.push_back( op );
       sign( tx, alice_private_key );
-      db->push_transaction( tx, 0 );
+      push_transaction( tx, 0 );
       BOOST_REQUIRE( db->get_account( "alice" ).savings_withdraw_requests == i + 1 );
     }
 
@@ -6948,7 +7191,7 @@ BOOST_AUTO_TEST_CASE( transfer_from_savings_apply )
     tx.clear();
     tx.operations.push_back( op );
     sign( tx, alice_private_key );
-    HIVE_REQUIRE_THROW( db->push_transaction( tx, 0 ), fc::exception );
+    HIVE_REQUIRE_THROW( push_transaction( tx, 0 ), fc::exception );
     BOOST_REQUIRE( db->get_account( "alice" ).savings_withdraw_requests == HIVE_SAVINGS_WITHDRAW_REQUEST_LIMIT );
     validate_database();
   }
@@ -7037,7 +7280,7 @@ BOOST_AUTO_TEST_CASE( cancel_transfer_from_savings_apply )
     tx.operations.push_back( save );
     tx.operations.push_back( withdraw );
     sign( tx, alice_private_key );
-    db->push_transaction( tx, 0 );
+    push_transaction( tx, 0 );
     validate_database();
 
     BOOST_REQUIRE( db->get_account( "alice" ).savings_withdraw_requests == 1 );
@@ -7052,7 +7295,7 @@ BOOST_AUTO_TEST_CASE( cancel_transfer_from_savings_apply )
     tx.clear();
     tx.operations.push_back( op );
     sign( tx, alice_private_key );
-    HIVE_REQUIRE_THROW( db->push_transaction( tx, 0 ), fc::exception );
+    HIVE_REQUIRE_THROW( push_transaction( tx, 0 ), fc::exception );
     validate_database();
 
     BOOST_REQUIRE( db->get_account( "alice" ).savings_withdraw_requests == 1 );
@@ -7065,7 +7308,7 @@ BOOST_AUTO_TEST_CASE( cancel_transfer_from_savings_apply )
     tx.clear();
     tx.operations.push_back( op );
     sign( tx, alice_private_key );
-    db->push_transaction( tx, 0 );
+    push_transaction( tx, 0 );
 
     BOOST_REQUIRE( get_balance( "alice" ) == ASSET( "0.000 TESTS" ) );
     BOOST_REQUIRE( get_savings( "alice" ) == ASSET( "10.000 TESTS" ) );
@@ -7123,7 +7366,7 @@ BOOST_AUTO_TEST_CASE( decline_voting_rights_apply )
     tx.set_expiration( db->head_block_time() + HIVE_MAX_TIME_UNTIL_EXPIRATION );
     tx.operations.push_back( proxy );
     sign( tx, bob_private_key );
-    db->push_transaction( tx, 0 );
+    push_transaction( tx, 0 );
 
 
     decline_voting_rights_operation op;
@@ -7134,7 +7377,7 @@ BOOST_AUTO_TEST_CASE( decline_voting_rights_apply )
     tx.clear();
     tx.operations.push_back( op );
     sign( tx, alice_private_key );
-    db->push_transaction( tx, 0 );
+    push_transaction( tx, 0 );
 
     const auto& request_idx = db->get_index< decline_voting_rights_request_index >().indices().get< by_account >();
     auto itr = request_idx.find( db->get_account( "alice" ).name );
@@ -7148,7 +7391,7 @@ BOOST_AUTO_TEST_CASE( decline_voting_rights_apply )
     tx.operations.push_back( op );
     tx.set_expiration( db->head_block_time() + HIVE_MAX_TIME_UNTIL_EXPIRATION );
     sign( tx, alice_private_key );
-    HIVE_REQUIRE_THROW( db->push_transaction( tx, 0 ), fc::exception );
+    HIVE_REQUIRE_THROW( push_transaction( tx, 0 ), fc::exception );
 
 
     BOOST_TEST_MESSAGE( "--- successs cancelling a request" );
@@ -7156,7 +7399,7 @@ BOOST_AUTO_TEST_CASE( decline_voting_rights_apply )
     tx.clear();
     tx.operations.push_back( op );
     sign( tx, alice_private_key );
-    db->push_transaction( tx, 0 );
+    push_transaction( tx, 0 );
 
     itr = request_idx.find( db->get_account( "alice" ).name );
     BOOST_REQUIRE( itr == request_idx.end() );
@@ -7168,7 +7411,7 @@ BOOST_AUTO_TEST_CASE( decline_voting_rights_apply )
     tx.operations.push_back( op );
     tx.set_expiration( db->head_block_time() + HIVE_MAX_TIME_UNTIL_EXPIRATION );
     sign( tx, alice_private_key );
-    HIVE_REQUIRE_THROW( db->push_transaction( tx, 0 ), fc::exception );
+    HIVE_REQUIRE_THROW( push_transaction( tx, 0 ), fc::exception );
 
 
     BOOST_TEST_MESSAGE( "--- check account can vote during waiting period" );
@@ -7176,7 +7419,7 @@ BOOST_AUTO_TEST_CASE( decline_voting_rights_apply )
     tx.clear();
     tx.operations.push_back( op );
     sign( tx, alice_private_key );
-    db->push_transaction( tx, 0 );
+    push_transaction( tx, 0 );
 
     generate_blocks( db->head_block_time() + HIVE_OWNER_AUTH_RECOVERY_PERIOD - fc::seconds( HIVE_BLOCK_INTERVAL ), true );
     BOOST_REQUIRE( db->get_account( "alice" ).can_vote );
@@ -7189,7 +7432,7 @@ BOOST_AUTO_TEST_CASE( decline_voting_rights_apply )
     tx.operations.push_back( witness_vote );
     tx.set_expiration( db->head_block_time() + HIVE_MAX_TIME_UNTIL_EXPIRATION );
     sign( tx, alice_private_key );
-    db->push_transaction( tx, 0 );
+    push_transaction( tx, 0 );
 
     comment_operation comment;
     comment.author = "alice";
@@ -7206,7 +7449,7 @@ BOOST_AUTO_TEST_CASE( decline_voting_rights_apply )
     tx.operations.push_back( comment );
     tx.operations.push_back( vote );
     sign( tx, alice_private_key );
-    db->push_transaction( tx, 0 );
+    push_transaction( tx, 0 );
     validate_database();
 
 
@@ -7226,7 +7469,7 @@ BOOST_AUTO_TEST_CASE( decline_voting_rights_apply )
     tx.set_expiration( db->head_block_time() + HIVE_MAX_TIME_UNTIL_EXPIRATION );
     tx.operations.push_back( witness_vote );
     sign( tx, alice_private_key );
-    HIVE_REQUIRE_THROW( db->push_transaction( tx, 0 ), fc::exception );
+    HIVE_REQUIRE_THROW( push_transaction( tx, 0 ), fc::exception );
 
     db->get< comment_vote_object, by_comment_voter >( boost::make_tuple( db->get_comment( "alice", string( "test" ) ).get_id(), get_account_id( "alice" ) ) );
 
@@ -7234,20 +7477,20 @@ BOOST_AUTO_TEST_CASE( decline_voting_rights_apply )
     tx.clear();
     tx.operations.push_back( vote );
     sign( tx, alice_private_key );
-    HIVE_REQUIRE_THROW( db->push_transaction( tx, 0 ), fc::exception );
+    HIVE_REQUIRE_THROW( push_transaction( tx, 0 ), fc::exception );
 
     vote.weight = HIVE_1_PERCENT * 50;
     tx.clear();
     tx.operations.push_back( vote );
     sign( tx, alice_private_key );
-    HIVE_REQUIRE_THROW( db->push_transaction( tx, 0 ), fc::exception );
+    HIVE_REQUIRE_THROW( push_transaction( tx, 0 ), fc::exception );
 
     proxy.account = "alice";
     proxy.proxy = "bob";
     tx.clear();
     tx.operations.push_back( proxy );
     sign( tx, alice_private_key );
-    HIVE_REQUIRE_THROW( db->push_transaction( tx, 0 ), fc::exception );
+    HIVE_REQUIRE_THROW( push_transaction( tx, 0 ), fc::exception );
   }
   FC_LOG_AND_RETHROW()
 }
@@ -7401,7 +7644,7 @@ BOOST_AUTO_TEST_CASE( account_create_with_delegation_apply )
     tx.operations.push_back( op );
     tx.set_expiration( db->head_block_time() + HIVE_MAX_TIME_UNTIL_EXPIRATION );
     sign( tx, alice_private_key );
-    HIVE_REQUIRE_THROW( db->push_transaction( tx, 0 ), fc::assert_exception );
+    HIVE_REQUIRE_THROW( push_transaction( tx, 0 ), fc::assert_exception );
   }
   FC_LOG_AND_RETHROW()
 }
@@ -7459,7 +7702,7 @@ BOOST_AUTO_TEST_CASE( claim_reward_balance_apply )
     tx.operations.push_back( op );
     tx.set_expiration( db->head_block_time() + HIVE_MAX_TIME_UNTIL_EXPIRATION );
     sign( tx, alice_private_key );
-    HIVE_REQUIRE_THROW( db->push_transaction( tx, 0 ), fc::assert_exception );
+    HIVE_REQUIRE_THROW( push_transaction( tx, 0 ), fc::assert_exception );
 
 
     BOOST_TEST_MESSAGE( "--- Claiming a partial reward balance" );
@@ -7469,7 +7712,7 @@ BOOST_AUTO_TEST_CASE( claim_reward_balance_apply )
     tx.clear();
     tx.operations.push_back( op );
     sign( tx, alice_private_key );
-    db->push_transaction( tx, 0 );
+    push_transaction( tx, 0 );
 
     BOOST_REQUIRE( get_balance( "alice" ) == alice_hive + op.reward_hive );
     BOOST_REQUIRE( get_rewards( "alice" ) == ASSET( "10.000 TESTS" ) );
@@ -7490,7 +7733,7 @@ BOOST_AUTO_TEST_CASE( claim_reward_balance_apply )
     tx.clear();
     tx.operations.push_back( op );
     sign( tx, alice_private_key );
-    db->push_transaction( tx, 0 );
+    push_transaction( tx, 0 );
 
     BOOST_REQUIRE( get_balance( "alice" ) == alice_hive + op.reward_hive );
     BOOST_REQUIRE( get_rewards( "alice" ) == ASSET( "0.000 TESTS" ) );
@@ -7536,11 +7779,11 @@ BOOST_AUTO_TEST_CASE( delegate_vesting_shares_authorities )
     tx.operations.push_back( op );
 
     BOOST_TEST_MESSAGE( "--- Test failure when no signatures" );
-    HIVE_REQUIRE_THROW( db->push_transaction( tx, 0 ), tx_missing_active_auth );
+    HIVE_REQUIRE_THROW( push_transaction( tx, 0 ), tx_missing_active_auth );
 
     BOOST_TEST_MESSAGE( "--- Test success with witness signature" );
     sign( tx, alice_private_key );
-    db->push_transaction( tx, 0 );
+    push_transaction( tx, 0 );
 
     BOOST_TEST_MESSAGE( "--- Test failure when duplicate signatures" );
     tx.operations.clear();
@@ -7549,18 +7792,18 @@ BOOST_AUTO_TEST_CASE( delegate_vesting_shares_authorities )
     tx.operations.push_back( op );
     sign( tx, alice_private_key );
     sign( tx, alice_private_key );
-    HIVE_REQUIRE_THROW( db->push_transaction( tx, 0 ), tx_duplicate_sig );
+    HIVE_REQUIRE_THROW( push_transaction( tx, 0 ), tx_duplicate_sig );
 
     BOOST_TEST_MESSAGE( "--- Test failure when signed by an additional signature not in the creator's authority" );
     tx.signatures.clear();
     sign( tx, init_account_priv_key );
     sign( tx, alice_private_key );
-    HIVE_REQUIRE_THROW( db->push_transaction( tx, 0 ), tx_irrelevant_sig );
+    HIVE_REQUIRE_THROW( push_transaction( tx, 0 ), tx_irrelevant_sig );
 
     BOOST_TEST_MESSAGE( "--- Test failure when signed by a signature not in the creator's authority" );
     tx.signatures.clear();
     sign( tx, init_account_priv_key );
-    HIVE_REQUIRE_THROW( db->push_transaction( tx, 0 ), tx_missing_active_auth );
+    HIVE_REQUIRE_THROW( push_transaction( tx, 0 ), tx_missing_active_auth );
     validate_database();
   }
   FC_LOG_AND_RETHROW()
@@ -7613,7 +7856,7 @@ BOOST_AUTO_TEST_CASE( delegate_vesting_shares_apply )
     tx.set_expiration( db->head_block_time() + HIVE_MAX_TIME_UNTIL_EXPIRATION );
     tx.operations.push_back( op );
     sign( tx, alice_private_key );
-    db->push_transaction( tx, 0 );
+    push_transaction( tx, 0 );
     generate_blocks( 1 );
     const account_object& alice_acc = db->get_account( "alice" );
     const account_object& bob_acc = db->get_account( "bob" );
@@ -7626,11 +7869,11 @@ BOOST_AUTO_TEST_CASE( delegate_vesting_shares_apply )
     BOOST_REQUIRE( bob_acc.downvote_manabar.current_mana == old_bob_downvote_manabar.current_mana + op.vesting_shares.amount.value / 4 );
 
     BOOST_TEST_MESSAGE( "--- Test that the delegation object is correct. " );
-    auto delegation = db->find< vesting_delegation_object, by_delegation >( boost::make_tuple( op.delegator, op.delegatee ) );
+    auto delegation = db->find< vesting_delegation_object, by_delegation >( boost::make_tuple( alice_acc.get_id(), bob_acc.get_id() ) );
 
 
     BOOST_REQUIRE( delegation != nullptr );
-    BOOST_REQUIRE( delegation->delegator == op.delegator);
+    BOOST_REQUIRE( delegation->get_delegator() == alice_acc.get_id() );
     BOOST_REQUIRE( delegation->get_vesting() == ASSET( "10000000.000000 VESTS"));
 
     old_manabar = VOTING_MANABAR( "alice" );
@@ -7657,13 +7900,13 @@ BOOST_AUTO_TEST_CASE( delegate_vesting_shares_apply )
     tx.set_expiration( db->head_block_time() + HIVE_MAX_TIME_UNTIL_EXPIRATION );
     tx.operations.push_back( op );
     sign( tx, alice_private_key );
-    db->push_transaction( tx, 0 );
+    push_transaction( tx, 0 );
     generate_blocks(1);
 
     idump( (alice_acc.voting_manabar)(old_manabar)(delta) );
 
     BOOST_REQUIRE( delegation != nullptr );
-    BOOST_REQUIRE( delegation->delegator == op.delegator);
+    BOOST_REQUIRE( delegation->get_delegator() == alice_acc.get_id() );
     BOOST_REQUIRE( delegation->get_vesting() == ASSET( "20000000.000000 VESTS"));
     BOOST_REQUIRE( alice_acc.get_delegated_vesting() == ASSET( "20000000.000000 VESTS"));
     BOOST_REQUIRE( alice_acc.voting_manabar.current_mana == old_manabar.current_mana - delta );
@@ -7679,7 +7922,7 @@ BOOST_AUTO_TEST_CASE( delegate_vesting_shares_apply )
     tx.clear();
     tx.operations.push_back( op );
     sign( tx, bob_private_key );
-    BOOST_REQUIRE_THROW( db->push_transaction( tx, 0 ), fc::exception );
+    BOOST_REQUIRE_THROW( push_transaction( tx, 0 ), fc::exception );
 
 
     BOOST_TEST_MESSAGE( "--- Test that effective vesting shares is accurate and being applied." );
@@ -7699,7 +7942,7 @@ BOOST_AUTO_TEST_CASE( delegate_vesting_shares_apply )
     tx.operations.push_back( comment_op );
     tx.set_expiration( db->head_block_time() + HIVE_MAX_TIME_UNTIL_EXPIRATION );
     sign( tx, alice_private_key );
-    db->push_transaction( tx, 0 );
+    push_transaction( tx, 0 );
     tx.signatures.clear();
     tx.operations.clear();
     vote_operation vote_op;
@@ -7711,7 +7954,7 @@ BOOST_AUTO_TEST_CASE( delegate_vesting_shares_apply )
     tx.operations.push_back( vote_op );
     sign( tx, bob_private_key );
 
-    db->push_transaction( tx, 0 );
+    push_transaction( tx, 0 );
     generate_blocks(1);
 
     const auto& vote_idx = db->get_index< comment_vote_index >().indices().get< by_comment_voter >();
@@ -7719,12 +7962,15 @@ BOOST_AUTO_TEST_CASE( delegate_vesting_shares_apply )
     auto& alice_comment = db->get_comment( "alice", string( "foo" ) );
     const comment_cashout_object* alice_comment_cashout = db->find_comment_cashout( alice_comment );
     auto itr = vote_idx.find( boost::make_tuple( alice_comment.get_id(), bob_acc.get_id() ) );
-    BOOST_REQUIRE( alice_comment_cashout->net_rshares.value == old_manabar.current_mana - db->get_account( "bob" ).voting_manabar.current_mana - HIVE_VOTE_DUST_THRESHOLD );
-    BOOST_REQUIRE( itr->rshares == old_manabar.current_mana - db->get_account( "bob" ).voting_manabar.current_mana - HIVE_VOTE_DUST_THRESHOLD );
+    BOOST_REQUIRE( alice_comment_cashout->get_net_rshares() == old_manabar.current_mana - db->get_account( "bob" ).voting_manabar.current_mana - HIVE_VOTE_DUST_THRESHOLD );
+    BOOST_REQUIRE( itr->get_rshares() == old_manabar.current_mana - db->get_account( "bob" ).voting_manabar.current_mana - HIVE_VOTE_DUST_THRESHOLD );
 
     generate_block();
     ACTORS( (sam)(dave) )
     generate_block();
+
+    const account_object& sam_acc = db->get_account( "sam" );
+    const account_object& dave_acc = db->get_account( "dave" );
 
     vest( HIVE_INIT_MINER_NAME, "sam", ASSET( "1000.000 TESTS" ) );
 
@@ -7738,7 +7984,7 @@ BOOST_AUTO_TEST_CASE( delegate_vesting_shares_apply )
     op.delegatee = "dave";
     tx.set_expiration( db->head_block_time() + HIVE_MAX_TIME_UNTIL_EXPIRATION );
     sign( tx, sam_private_key );
-    HIVE_REQUIRE_THROW( db->push_transaction( tx ), fc::assert_exception );
+    HIVE_REQUIRE_THROW( push_transaction( tx ), fc::assert_exception );
 
 
     BOOST_TEST_MESSAGE( "--- Testing failure delegating more vesting shares than account has." );
@@ -7746,7 +7992,7 @@ BOOST_AUTO_TEST_CASE( delegate_vesting_shares_apply )
     op.vesting_shares = asset( sam_vest.amount + 1, VESTS_SYMBOL );
     tx.operations.push_back( op );
     sign( tx, sam_private_key );
-    HIVE_REQUIRE_THROW( db->push_transaction( tx ), fc::assert_exception );
+    HIVE_REQUIRE_THROW( push_transaction( tx ), fc::assert_exception );
 
     BOOST_TEST_MESSAGE( "--- Testing failure delegating when there is not enough mana" );
 
@@ -7764,7 +8010,7 @@ BOOST_AUTO_TEST_CASE( delegate_vesting_shares_apply )
     tx.clear();
     tx.operations.push_back( op );
     sign( tx, sam_private_key );
-    HIVE_REQUIRE_THROW( db->push_transaction( tx ), fc::assert_exception );
+    HIVE_REQUIRE_THROW( push_transaction( tx ), fc::assert_exception );
 
     BOOST_TEST_MESSAGE( "--- Testing failure delegating when there is not enough downvote mana" );
 
@@ -7783,7 +8029,7 @@ BOOST_AUTO_TEST_CASE( delegate_vesting_shares_apply )
     tx.clear();
     tx.operations.push_back( op );
     sign( tx, sam_private_key );
-    HIVE_REQUIRE_THROW( db->push_transaction( tx ), fc::assert_exception );
+    HIVE_REQUIRE_THROW( push_transaction( tx ), fc::assert_exception );
 
     BOOST_TEST_MESSAGE( "--- Test failure delegating vesting shares that are part of a power down" );
     generate_block();
@@ -7803,19 +8049,19 @@ BOOST_AUTO_TEST_CASE( delegate_vesting_shares_apply )
     withdraw.vesting_shares = sam_vest;
     tx.operations.push_back( withdraw );
     sign( tx, sam_private_key );
-    db->push_transaction( tx, 0 );
+    push_transaction( tx, 0 );
 
     tx.clear();
     op.vesting_shares = asset( sam_vest.amount + 2, VESTS_SYMBOL );
     tx.operations.push_back( op );
     sign( tx, sam_private_key );
-    HIVE_REQUIRE_THROW( db->push_transaction( tx ), fc::assert_exception );
+    HIVE_REQUIRE_THROW( push_transaction( tx ), fc::assert_exception );
 
     tx.clear();
     withdraw.vesting_shares = ASSET( "0.000000 VESTS" );
     tx.operations.push_back( withdraw );
     sign( tx, sam_private_key );
-    db->push_transaction( tx, 0 );
+    push_transaction( tx, 0 );
 
 
     BOOST_TEST_MESSAGE( "--- Test failure powering down vesting shares that are delegated" );
@@ -7824,13 +8070,13 @@ BOOST_AUTO_TEST_CASE( delegate_vesting_shares_apply )
     tx.clear();
     tx.operations.push_back( op );
     sign( tx, sam_private_key );
-    db->push_transaction( tx, 0 );
+    push_transaction( tx, 0 );
 
     tx.clear();
     withdraw.vesting_shares = asset( sam_vest.amount, VESTS_SYMBOL );
     tx.operations.push_back( withdraw );
     sign( tx, sam_private_key );
-    HIVE_REQUIRE_THROW( db->push_transaction( tx ), fc::assert_exception );
+    HIVE_REQUIRE_THROW( push_transaction( tx ), fc::assert_exception );
 
 
     BOOST_TEST_MESSAGE( "--- Remove a delegation and ensure it is returned after 1 week" );
@@ -7847,7 +8093,7 @@ BOOST_AUTO_TEST_CASE( delegate_vesting_shares_apply )
     op.vesting_shares = ASSET( "0.000000 VESTS" );
     tx.operations.push_back( op );
     sign( tx, sam_private_key );
-    db->push_transaction( tx, 0 );
+    push_transaction( tx, 0 );
 
     auto exp_obj = db->get_index< vesting_delegation_expiration_index, by_id >().begin();
     auto end = db->get_index< vesting_delegation_expiration_index, by_id >().end();
@@ -7856,12 +8102,12 @@ BOOST_AUTO_TEST_CASE( delegate_vesting_shares_apply )
     BOOST_REQUIRE( gpo.delegation_return_period == HIVE_DELEGATION_RETURN_PERIOD_HF20 );
 
     BOOST_REQUIRE( exp_obj != end );
-    BOOST_REQUIRE( exp_obj->delegator == "sam" );
+    BOOST_REQUIRE( exp_obj->get_delegator() == sam_id );
     BOOST_REQUIRE( exp_obj->get_vesting() == sam_vest );
-    BOOST_REQUIRE( exp_obj->expiration == db->head_block_time() + gpo.delegation_return_period );
+    BOOST_REQUIRE( exp_obj->get_expiration_time() == db->head_block_time() + gpo.delegation_return_period );
     BOOST_REQUIRE( db->get_account( "sam" ).get_delegated_vesting() == sam_vest );
     BOOST_REQUIRE( db->get_account( "dave" ).get_received_vesting() == ASSET( "0.000000 VESTS" ) );
-    delegation = db->find< vesting_delegation_object, by_delegation >( boost::make_tuple( op.delegator, op.delegatee ) );
+    delegation = db->find< vesting_delegation_object, by_delegation >( boost::make_tuple( sam_acc.get_id(), dave_acc.get_id() ) );
     BOOST_REQUIRE( delegation == nullptr );
 
     old_sam_manabar.regenerate_mana( sam_params, db->head_block_time() );
@@ -7885,7 +8131,7 @@ BOOST_AUTO_TEST_CASE( delegate_vesting_shares_apply )
     sam_params.max_mana = util::get_effective_vesting_shares( db->get_account( "sam" ) );
     dave_params.max_mana = util::get_effective_vesting_shares( db->get_account( "dave" ) );
 
-    generate_blocks( exp_obj->expiration + HIVE_BLOCK_INTERVAL );
+    generate_blocks( exp_obj->get_expiration_time() + HIVE_BLOCK_INTERVAL );
 
     old_sam_manabar.regenerate_mana( sam_params, db->head_block_time() );
     sam_params.max_mana /= 4;
@@ -7940,7 +8186,7 @@ BOOST_AUTO_TEST_CASE( issue_971_vesting_removal )
     tx.set_expiration( db->head_block_time() + HIVE_MAX_TIME_UNTIL_EXPIRATION );
     tx.operations.push_back( op );
     sign( tx, alice_private_key );
-    db->push_transaction( tx, 0 );
+    push_transaction( tx, 0 );
     generate_block();
     const account_object& alice_acc = db->get_account( "alice" );
     const account_object& bob_acc = db->get_account( "bob" );
@@ -7965,7 +8211,7 @@ BOOST_AUTO_TEST_CASE( issue_971_vesting_removal )
     tx.clear();
     tx.operations.push_back( op );
     sign( tx, alice_private_key );
-    db->push_transaction( tx, 0 );
+    push_transaction( tx, 0 );
     generate_block();
 
     BOOST_REQUIRE( alice_acc.get_delegated_vesting() == ASSET( "10000000.000000 VESTS"));
@@ -8083,7 +8329,7 @@ BOOST_AUTO_TEST_CASE( comment_beneficiaries_apply )
     tx.operations.push_back( comment );
     tx.set_expiration( db->head_block_time() + HIVE_MIN_TRANSACTION_EXPIRATION_LIMIT );
     sign( tx, alice_private_key );
-    db->push_transaction( tx );
+    push_transaction( tx );
 
     BOOST_TEST_MESSAGE( "--- Test failure on more than 8 benefactors" );
     b.beneficiaries.push_back( beneficiary_route_type( account_name_type( "bob" ), HIVE_1_PERCENT ) );
@@ -8100,7 +8346,7 @@ BOOST_AUTO_TEST_CASE( comment_beneficiaries_apply )
     tx.clear();
     tx.operations.push_back( op );
     sign( tx, alice_private_key );
-    HIVE_REQUIRE_THROW( db->push_transaction( tx ), chain::plugin_exception );
+    HIVE_REQUIRE_THROW( push_transaction( tx ), chain::plugin_exception );
 
 
     BOOST_TEST_MESSAGE( "--- Test specifying a non-existent benefactor" );
@@ -8111,7 +8357,7 @@ BOOST_AUTO_TEST_CASE( comment_beneficiaries_apply )
     tx.clear();
     tx.operations.push_back( op );
     sign( tx, alice_private_key );
-    HIVE_REQUIRE_THROW( db->push_transaction( tx ), fc::assert_exception );
+    HIVE_REQUIRE_THROW( push_transaction( tx ), fc::assert_exception );
 
 
     BOOST_TEST_MESSAGE( "--- Test setting when comment has been voted on" );
@@ -8132,14 +8378,14 @@ BOOST_AUTO_TEST_CASE( comment_beneficiaries_apply )
     tx.operations.push_back( op );
     sign( tx, alice_private_key );
     sign( tx, bob_private_key );
-    HIVE_REQUIRE_THROW( db->push_transaction( tx ), fc::assert_exception );
+    HIVE_REQUIRE_THROW( push_transaction( tx ), fc::assert_exception );
 
 
     BOOST_TEST_MESSAGE( "--- Test success" );
     tx.clear();
     tx.operations.push_back( op );
     sign( tx, alice_private_key );
-    db->push_transaction( tx );
+    push_transaction( tx );
 
 
     BOOST_TEST_MESSAGE( "--- Test setting when there are already beneficiaries" );
@@ -8148,16 +8394,16 @@ BOOST_AUTO_TEST_CASE( comment_beneficiaries_apply )
     op.extensions.clear();
     op.extensions.insert( b );
     sign( tx, alice_private_key );
-    HIVE_REQUIRE_THROW( db->push_transaction( tx ), fc::assert_exception );
+    HIVE_REQUIRE_THROW( push_transaction( tx ), fc::assert_exception );
 
 
     BOOST_TEST_MESSAGE( "--- Payout and verify rewards were split properly" );
     tx.clear();
     tx.operations.push_back( vote );
     sign( tx, bob_private_key );
-    db->push_transaction( tx, 0 );
+    push_transaction( tx, 0 );
 
-    generate_blocks( db->find_comment_cashout( db->get_comment( "alice", string( "test" ) ) )->cashout_time - HIVE_BLOCK_INTERVAL );
+    generate_blocks( db->find_comment_cashout( db->get_comment( "alice", string( "test" ) ) )->get_cashout_time() - HIVE_BLOCK_INTERVAL );
 
     db_plugin->debug_update( [=]( database& db )
     {
@@ -8185,6 +8431,282 @@ BOOST_AUTO_TEST_CASE( comment_beneficiaries_apply )
   FC_LOG_AND_RETHROW()
 }
 
+BOOST_AUTO_TEST_CASE( comment_options_apply )
+{
+  try
+  {
+    BOOST_TEST_MESSAGE( "Test Comment options" );
+    ACTORS( (alice)(bob)(sam)(dave) )
+    generate_block();
+
+    db_plugin->debug_update( [=]( database& db )
+    {
+      db.modify( db.get_dynamic_global_properties(), [=]( dynamic_global_property_object& gpo )
+      {
+        gpo.sps_fund_percent = 0;
+      } );
+
+      db.modify( db.get_treasury(), [=]( account_object& a )
+      {
+        a.hbd_balance.amount.value = 0;
+      } );
+    } );
+
+    set_price_feed( price( ASSET( "1.000 TBD" ), ASSET( "1.000 TESTS" ) ) );
+
+    comment_operation comment;
+    vote_operation vote;
+    comment_options_operation op;
+    signed_transaction tx;
+
+    comment.author = "alice";
+    comment.permlink = "test1";
+    comment.parent_permlink = "test";
+    comment.title = "test";
+    comment.body = "foobar";
+    push_transaction( comment, alice_private_key );
+    generate_block();
+    comment.parent_author = "alice";
+    comment.parent_permlink = "test1";
+    comment.permlink = "test2";
+    push_transaction( comment, alice_private_key );
+    generate_block();
+    comment.permlink = "test3";
+    push_transaction( comment, alice_private_key );
+    generate_block();
+
+    BOOST_TEST_MESSAGE( "--- Test clearing allow_votes when comment has been voted on" );
+    vote.author = "alice";
+    vote.permlink = "test1";
+    vote.voter = "bob";
+    vote.weight = HIVE_100_PERCENT;
+
+    op.author = "alice";
+    op.permlink = "test1";
+    op.allow_votes = false;
+
+    tx.clear();
+    tx.operations.push_back( vote );
+    tx.operations.push_back( op );
+    tx.set_expiration( db->head_block_time() + HIVE_MIN_TRANSACTION_EXPIRATION_LIMIT );
+    sign( tx, alice_private_key );
+    sign( tx, bob_private_key );
+    HIVE_REQUIRE_ASSERT( push_transaction( tx ), "!comment_cashout->has_votes()" );
+
+    BOOST_TEST_MESSAGE( "--- Test success of clearing allow_votes" );
+    push_transaction( op, alice_private_key );
+
+    BOOST_TEST_MESSAGE( "--- Test voting no longer possible" );
+    HIVE_REQUIRE_ASSERT( push_transaction( vote, bob_private_key ), "comment_cashout->allows_votes()" );
+
+    BOOST_TEST_MESSAGE( "--- Test enabling voting back not possible" );
+    op.allow_votes = true;
+    HIVE_REQUIRE_ASSERT( push_transaction( op, alice_private_key ), "comment_cashout->allows_votes() >= o.allow_votes" );
+
+    BOOST_TEST_MESSAGE( "--- Test success - voting actually possible but only downvoting" );
+    //ABW: that is probably the source of confusion, however if all votes were disallowed author
+    //of some negative content could not even be affected on reputation
+    vote.weight = -HIVE_100_PERCENT;
+    push_transaction( vote, bob_private_key );
+
+    BOOST_TEST_MESSAGE( "--- Test clearing allow_curation_rewards when comment has been voted on" );
+    vote.voter = "sam";
+    vote.permlink = "test2";
+    vote.weight = HIVE_100_PERCENT;
+    op.permlink = "test2";
+    op.allow_curation_rewards = false;
+
+    tx.clear();
+    tx.operations.push_back( vote );
+    tx.operations.push_back( op );
+    tx.set_expiration( db->head_block_time() + HIVE_MIN_TRANSACTION_EXPIRATION_LIMIT );
+    sign( tx, alice_private_key );
+    sign( tx, sam_private_key );
+    HIVE_REQUIRE_ASSERT( push_transaction( tx ), "!comment_cashout->has_votes()" );
+
+    BOOST_TEST_MESSAGE( "--- Test success of clearing allow_curation_rewards" );
+    push_transaction( op, alice_private_key );
+
+    BOOST_TEST_MESSAGE( "--- Test enabling curations back not possible" );
+    op.allow_curation_rewards = true;
+    HIVE_REQUIRE_ASSERT( push_transaction( op, alice_private_key ), "comment_cashout->allows_curation_rewards() >= o.allow_curation_rewards" );
+
+    BOOST_TEST_MESSAGE( "--- Test success of voting on comment with cleared allow_curation_rewards" );
+    push_transaction( vote, sam_private_key );
+
+
+    BOOST_TEST_MESSAGE( "--- Test setting lower max_accepted_payout when comment has been voted on" );
+    vote.voter = "dave";
+    vote.permlink = "test3";
+    op.permlink = "test3";
+    op.max_accepted_payout = ASSET( "0.010 TBD" );
+
+    tx.clear();
+    tx.operations.push_back( vote );
+    tx.operations.push_back( op );
+    tx.set_expiration( db->head_block_time() + HIVE_MIN_TRANSACTION_EXPIRATION_LIMIT );
+    sign( tx, alice_private_key );
+    sign( tx, dave_private_key );
+    HIVE_REQUIRE_ASSERT( push_transaction( tx ), "!comment_cashout->has_votes()" );
+
+    BOOST_TEST_MESSAGE( "--- Test success of setting lower max_accepted_payout" );
+    push_transaction( op, alice_private_key );
+
+    BOOST_TEST_MESSAGE( "--- Test increasing max_accepted_payout not possible" );
+    op.max_accepted_payout.amount *= 2;
+    HIVE_REQUIRE_ASSERT( push_transaction( op, alice_private_key ), "comment_cashout->get_max_accepted_payout() >= o.max_accepted_payout" );
+
+    BOOST_TEST_MESSAGE( "--- Test success of voting on comment with lowered max_accepted_payout" );
+    push_transaction( vote, dave_private_key );
+
+    BOOST_TEST_MESSAGE( "--- Payout and verify rewards on comment with disabled curation rewards" );
+    generate_blocks( db->find_comment_cashout( db->get_comment( "alice", string( "test1" ) ) )->get_cashout_time() - HIVE_BLOCK_INTERVAL );
+
+    auto set_reward_pool = [=]( database& db )
+    {
+      db.modify( db.get_dynamic_global_properties(), [=]( dynamic_global_property_object& gpo )
+      {
+        gpo.current_supply -= gpo.get_total_reward_fund_hive();
+        gpo.total_reward_fund_hive = ASSET( "100.000 TESTS" );
+        gpo.current_supply += gpo.get_total_reward_fund_hive();
+      } );
+    };
+
+    db_plugin->debug_update( set_reward_pool );
+    generate_block();
+
+    BOOST_REQUIRE( db->find_comment_cashout( db->get_comment( "alice", string( "test1" ) ) ) == nullptr );
+    //no reward for test1 comment
+    BOOST_REQUIRE_EQUAL( get_rewards( "alice" ).amount.value, 0 );
+    BOOST_REQUIRE_EQUAL( get_hbd_rewards( "alice" ).amount.value, 0 );
+    BOOST_REQUIRE_EQUAL( get_vest_rewards_as_hive( "alice" ).amount.value, 0 );
+    BOOST_REQUIRE_EQUAL( get_rewards( "bob" ).amount.value, 0 );
+    BOOST_REQUIRE_EQUAL( get_hbd_rewards( "bob" ).amount.value, 0 );
+    BOOST_REQUIRE_EQUAL( get_vest_rewards_as_hive( "bob" ).amount.value, 0 );
+
+    db_plugin->debug_update( set_reward_pool );
+    generate_block();
+
+    BOOST_REQUIRE( db->find_comment_cashout( db->get_comment( "alice", string( "test2" ) ) ) == nullptr );
+    //alice got reward for test2 comment as author...
+    BOOST_REQUIRE_EQUAL( get_rewards( "alice" ).amount.value, 0 );
+    BOOST_REQUIRE_EQUAL( get_hbd_rewards( "alice" ).amount.value, 18635 );
+    BOOST_REQUIRE_EQUAL( get_vest_rewards_as_hive( "alice" ).amount.value, 18635 );
+    //...but no curation for sam
+    BOOST_REQUIRE_EQUAL( get_rewards( "sam" ).amount.value, 0 );
+    BOOST_REQUIRE_EQUAL( get_hbd_rewards( "sam" ).amount.value, 0 );
+    BOOST_REQUIRE_EQUAL( get_vest_rewards_as_hive( "sam" ).amount.value, 0 );
+
+    db_plugin->debug_update( set_reward_pool );
+    generate_block();
+
+    BOOST_REQUIRE( db->find_comment_cashout( db->get_comment( "alice", string( "test3" ) ) ) == nullptr );
+    //alice and dave got reward for test3 comment but they sum to 0.010 HBD
+    BOOST_REQUIRE_EQUAL( get_rewards( "alice" ).amount.value, 0 );
+    BOOST_REQUIRE_EQUAL( get_hbd_rewards( "alice" ).amount.value, 18635 + 2 );
+    BOOST_REQUIRE_EQUAL( get_vest_rewards_as_hive( "alice" ).amount.value, 18635 + 3 );
+    BOOST_REQUIRE_EQUAL( get_rewards( "dave" ).amount.value, 0 );
+    BOOST_REQUIRE_EQUAL( get_hbd_rewards( "dave" ).amount.value, 0 );
+    BOOST_REQUIRE_EQUAL( get_vest_rewards_as_hive( "dave" ).amount.value, 5 );
+
+  }
+  FC_LOG_AND_RETHROW()
+}
+
+BOOST_AUTO_TEST_CASE( comment_options_deleted_permlink_reuse )
+{
+  try
+  {
+    BOOST_TEST_MESSAGE( "Test if comment options persist through deleted comment reuse" );
+    ACTORS( (alice)(bob) )
+    generate_block();
+
+    db_plugin->debug_update( [=]( database& db )
+    {
+      db.modify( db.get_dynamic_global_properties(), [=]( dynamic_global_property_object& gpo )
+      {
+        gpo.sps_fund_percent = 0;
+      } );
+
+      db.modify( db.get_treasury(), [=]( account_object& a )
+      {
+        a.hbd_balance.amount.value = 0;
+      } );
+    } );
+
+    set_price_feed( price( ASSET( "1.000 TBD" ), ASSET( "1.000 TESTS" ) ) );
+
+    comment_operation comment;
+    vote_operation vote;
+    comment_options_operation op;
+
+    comment.author = "alice";
+    comment.permlink = "test";
+    comment.parent_permlink = "test";
+    comment.title = "test";
+    comment.body = "foobar";
+    push_transaction( comment, alice_private_key );
+    op.author = "alice";
+    op.permlink = "test";
+    op.allow_curation_rewards = false;
+    op.allow_votes = false;
+    op.max_accepted_payout = ASSET( "0.010 TBD" );
+    push_transaction( op, alice_private_key );
+    generate_block();
+
+    BOOST_TEST_MESSAGE( "--- Downvoting comment (possible even with voting disabled)" );
+    vote.author = "alice";
+    vote.permlink = "test";
+    vote.voter = "bob";
+    vote.weight = -HIVE_100_PERCENT;
+    push_transaction( vote, bob_private_key );
+    generate_block();
+
+    BOOST_TEST_MESSAGE( "--- Comment has curations and voting blocked, small max payout; vote exists" );
+    const auto& old_comment = db->get_comment( "alice", string( "test" ) );
+    const auto* comment_cashout = db->find_comment_cashout( old_comment );
+    auto old_comment_id = old_comment.get_id();
+    BOOST_REQUIRE_EQUAL( comment_cashout->allows_curation_rewards(), false );
+    BOOST_REQUIRE_EQUAL( comment_cashout->allows_votes(), false );
+    BOOST_REQUIRE_EQUAL( comment_cashout->get_max_accepted_payout().amount.value, 10 );
+    const auto& vote_idx = db->get_index< comment_vote_index, by_comment_voter >();
+    auto voteI = vote_idx.find( boost::make_tuple( old_comment_id, bob_id ) );
+    BOOST_REQUIRE( voteI != vote_idx.end() );
+
+    BOOST_TEST_MESSAGE( "--- Deleting comment (right before cashout)" );
+    generate_blocks( comment_cashout->get_cashout_time() - HIVE_BLOCK_INTERVAL );
+
+    delete_comment_operation del_com;
+    del_com.author = "alice";
+    del_com.permlink = "test";
+    push_transaction( del_com, alice_private_key );
+    generate_block();
+
+    BOOST_TEST_MESSAGE( "--- Comment no longer exists, vote was also deleted" );
+    BOOST_REQUIRE( db->find_comment( "alice", string( "test" ) ) == nullptr );
+    voteI = vote_idx.find( boost::make_tuple( old_comment_id, bob_id ) );
+    BOOST_REQUIRE( voteI == vote_idx.end() );
+
+    BOOST_TEST_MESSAGE( "--- Reusing old permlink for new comment" );
+    comment.body = "bob, why the hate? :o(";
+    push_transaction( comment, alice_private_key );
+    generate_block();
+
+    BOOST_TEST_MESSAGE( "--- New comment has default options, no vote on it exists" );
+    const auto& new_comment = db->get_comment( "alice", string( "test" ) );
+    comment_cashout = db->find_comment_cashout( new_comment );
+    auto new_comment_id = new_comment.get_id();
+    BOOST_REQUIRE_EQUAL( comment_cashout->allows_curation_rewards(), true );
+    BOOST_REQUIRE_EQUAL( comment_cashout->allows_votes(), true );
+    BOOST_REQUIRE_EQUAL( comment_cashout->get_max_accepted_payout().amount.value, 1000000000 );
+    voteI = vote_idx.find( boost::make_tuple( new_comment_id, bob_id ) );
+    BOOST_REQUIRE( voteI == vote_idx.end() );
+    voteI = vote_idx.find( boost::make_tuple( old_comment_id, bob_id ) );
+    BOOST_REQUIRE( voteI == vote_idx.end() );
+  }
+  FC_LOG_AND_RETHROW()
+}
+
 BOOST_AUTO_TEST_CASE( witness_set_properties_validate )
 {
   try
@@ -8207,7 +8729,7 @@ BOOST_AUTO_TEST_CASE( witness_set_properties_validate )
     tx.set_expiration( db->head_block_time() + HIVE_MAX_TIME_UNTIL_EXPIRATION );
     tx.operations.push_back( op );
     sign( tx, alice_private_key );
-    db->push_transaction( tx, 0 );
+    push_transaction( tx, 0 );
     generate_block();
 
     BOOST_TEST_MESSAGE( "--- failure when signing key is not present" );
@@ -8383,7 +8905,7 @@ BOOST_AUTO_TEST_CASE( witness_set_properties_apply )
     tx.set_expiration( db->head_block_time() + HIVE_MAX_TIME_UNTIL_EXPIRATION );
     tx.operations.push_back( op );
     sign( tx, alice_private_key );
-    db->push_transaction( tx, 0 );
+    push_transaction( tx, 0 );
 
     BOOST_TEST_MESSAGE( "--- Test setting runtime parameters" );
 
@@ -8396,7 +8918,7 @@ BOOST_AUTO_TEST_CASE( witness_set_properties_apply )
     tx.clear();
     tx.operations.push_back( prop_op );
     sign( tx, signing_key );
-    db->push_transaction( tx, 0 );
+    push_transaction( tx, 0 );
     BOOST_REQUIRE( alice_witness.props.account_creation_fee == ASSET( "2.000 TESTS" ) );
 
     // Setting maximum_block_size
@@ -8405,7 +8927,7 @@ BOOST_AUTO_TEST_CASE( witness_set_properties_apply )
     tx.clear();
     tx.operations.push_back( prop_op );
     sign( tx, signing_key );
-    db->push_transaction( tx, 0 );
+    push_transaction( tx, 0 );
     BOOST_REQUIRE( alice_witness.props.maximum_block_size == HIVE_MIN_BLOCK_SIZE_LIMIT + 1 );
 
     // Setting hbd_interest_rate
@@ -8414,7 +8936,7 @@ BOOST_AUTO_TEST_CASE( witness_set_properties_apply )
     tx.clear();
     tx.operations.push_back( prop_op );
     sign( tx, signing_key );
-    db->push_transaction( tx, 0 );
+    push_transaction( tx, 0 );
     BOOST_REQUIRE( alice_witness.props.hbd_interest_rate == 700 );
 
     // Setting new signing_key
@@ -8426,7 +8948,7 @@ BOOST_AUTO_TEST_CASE( witness_set_properties_apply )
     tx.clear();
     tx.operations.push_back( prop_op );
     sign( tx, old_signing_key );
-    db->push_transaction( tx, 0 );
+    push_transaction( tx, 0 );
     BOOST_REQUIRE( alice_witness.signing_key == alice_pub );
 
     // Setting new hbd_exchange_rate
@@ -8438,7 +8960,7 @@ BOOST_AUTO_TEST_CASE( witness_set_properties_apply )
     tx.clear();
     tx.operations.push_back( prop_op );
     sign( tx, signing_key );
-    db->push_transaction( tx, 0 );
+    push_transaction( tx, 0 );
     BOOST_REQUIRE( alice_witness.get_hbd_exchange_rate() == price( ASSET( "1.000 TBD" ), ASSET( "100.000 TESTS" ) ) );
     BOOST_REQUIRE( alice_witness.get_last_hbd_exchange_update() == db->head_block_time() );
 
@@ -8448,7 +8970,7 @@ BOOST_AUTO_TEST_CASE( witness_set_properties_apply )
     tx.clear();
     tx.operations.push_back( prop_op );
     sign( tx, signing_key );
-    db->push_transaction( tx, 0 );
+    push_transaction( tx, 0 );
     BOOST_REQUIRE( alice_witness.url == "foo.bar" );
 
     // Setting new extranious_property
@@ -8456,7 +8978,7 @@ BOOST_AUTO_TEST_CASE( witness_set_properties_apply )
     tx.clear();
     tx.operations.push_back( prop_op );
     sign( tx, signing_key );
-    db->push_transaction( tx, 0 );
+    push_transaction( tx, 0 );
 
     BOOST_TEST_MESSAGE( "--- Testing failure when 'key' does not match witness signing key" );
     prop_op.props.erase( "extranious_property" );
@@ -8465,7 +8987,7 @@ BOOST_AUTO_TEST_CASE( witness_set_properties_apply )
     tx.clear();
     tx.operations.push_back( prop_op );
     sign( tx, old_signing_key );
-    HIVE_REQUIRE_THROW( db->push_transaction( tx, 0 ), fc::assert_exception );
+    HIVE_REQUIRE_THROW( push_transaction( tx, 0 ), fc::assert_exception );
 
     BOOST_TEST_MESSAGE( "--- Testing setting account subsidy rate" );
     prop_op.props[ "key" ].clear();
@@ -8474,7 +8996,7 @@ BOOST_AUTO_TEST_CASE( witness_set_properties_apply )
     tx.clear();
     tx.operations.push_back( prop_op );
     sign( tx, signing_key );
-    db->push_transaction( tx, 0 );
+    push_transaction( tx, 0 );
     BOOST_REQUIRE( alice_witness.props.account_subsidy_budget == HIVE_ACCOUNT_SUBSIDY_PRECISION );
 
     BOOST_TEST_MESSAGE( "--- Testing setting account subsidy pool cap" );
@@ -8484,7 +9006,7 @@ BOOST_AUTO_TEST_CASE( witness_set_properties_apply )
     tx.clear();
     tx.operations.push_back( prop_op );
     sign( tx, signing_key );
-    db->push_transaction( tx, 0 );
+    push_transaction( tx, 0 );
     BOOST_REQUIRE( alice_witness.props.account_subsidy_decay == day_decay );
 
     validate_database();
@@ -8577,7 +9099,7 @@ BOOST_AUTO_TEST_CASE( claim_account_apply )
     {
       // get consensus and non-consensus subsidies
       con_subs = db->get_dynamic_global_properties().available_account_subsidies;
-      ncon_subs = db->get< plugins::rc::rc_pool_object >().pool_array[ plugins::rc::resource_new_accounts ];
+      ncon_subs = db->get< plugins::rc::rc_pool_object >().get_pool( plugins::rc::resource_new_accounts );
     };
 
     // set_subsidy_budget creates a lot of blocks, so there should be enough for a few accounts
@@ -8596,7 +9118,7 @@ BOOST_AUTO_TEST_CASE( claim_account_apply )
     tx.operations.push_back( op );
     tx.set_expiration( db->head_block_time() + HIVE_MAX_TIME_UNTIL_EXPIRATION );
     sign( tx, alice_private_key );
-    BOOST_REQUIRE_THROW( db->push_transaction( tx, 0 ), fc::assert_exception );
+    BOOST_REQUIRE_THROW( push_transaction( tx, 0 ), fc::assert_exception );
     validate_database();
 
 
@@ -8619,7 +9141,7 @@ BOOST_AUTO_TEST_CASE( claim_account_apply )
     tx.clear();
     tx.operations.push_back( op );
     sign( tx, alice_private_key );
-    db->push_transaction( tx, 0 );
+    push_transaction( tx, 0 );
     get_subsidy_pools( c_subs, nc_subs );
 
     BOOST_REQUIRE( db->get_account( "alice" ).pending_claimed_accounts == 1 );
@@ -8633,7 +9155,7 @@ BOOST_AUTO_TEST_CASE( claim_account_apply )
     op.creator = "bob";
     tx.clear();
     tx.operations.push_back( op );
-    BOOST_REQUIRE_THROW( db->push_transaction( tx, 0 ), fc::exception );
+    BOOST_REQUIRE_THROW( push_transaction( tx, 0 ), fc::exception );
     validate_database();
 
 
@@ -8645,7 +9167,7 @@ BOOST_AUTO_TEST_CASE( claim_account_apply )
     tx.operations.push_back( op );
     tx.set_expiration( db->head_block_time() + HIVE_MAX_TIME_UNTIL_EXPIRATION );
     sign( tx, alice_private_key );
-    HIVE_REQUIRE_THROW( db->push_transaction( tx, 0 ), fc::assert_exception );
+    HIVE_REQUIRE_THROW( push_transaction( tx, 0 ), fc::assert_exception );
     validate_database();
 
 
@@ -8657,7 +9179,7 @@ BOOST_AUTO_TEST_CASE( claim_account_apply )
     tx.operations.push_back( op );
     tx.set_expiration( db->head_block_time() + HIVE_MAX_TIME_UNTIL_EXPIRATION );
     sign( tx, alice_private_key );
-    db->push_transaction( tx, 0 );
+    push_transaction( tx, 0 );
     get_subsidy_pools( c_subs, nc_subs );
 
     BOOST_REQUIRE( db->get_account( "alice" ).pending_claimed_accounts == 2 );
@@ -8685,7 +9207,7 @@ BOOST_AUTO_TEST_CASE( claim_account_apply )
     tx.operations.push_back( op );
     sign( tx, alice_private_key );
     ilog( "Pushing transaction: ${t}", ("t", tx) );
-    db->push_transaction( tx, 0 );
+    push_transaction( tx, 0 );
     get_subsidy_pools( c_subs, nc_subs );
     BOOST_CHECK( db->get_account( "alice" ).pending_claimed_accounts == 3 );
     BOOST_CHECK( get_balance( "alice" ) == ASSET( "10.000 TESTS" ) );
@@ -8716,7 +9238,7 @@ BOOST_AUTO_TEST_CASE( claim_account_apply )
     tx.clear();
     tx.operations.push_back( op );
     sign( tx, alice_private_key );
-    BOOST_REQUIRE_THROW( db->push_transaction( tx, 0 ), fc::assert_exception );
+    BOOST_REQUIRE_THROW( push_transaction( tx, 0 ), fc::assert_exception );
 
 
     BOOST_TEST_MESSAGE( "--- Test failure with no available subsidized accounts" );
@@ -8733,7 +9255,7 @@ BOOST_AUTO_TEST_CASE( claim_account_apply )
     tx.clear();
     tx.operations.push_back( op );
     sign( tx, alice_private_key );
-    BOOST_REQUIRE_THROW( db->push_transaction( tx, 0 ), fc::assert_exception );
+    BOOST_REQUIRE_THROW( push_transaction( tx, 0 ), fc::assert_exception );
 
 
     BOOST_TEST_MESSAGE( "--- Test failure on claim overflow" );
@@ -8752,7 +9274,7 @@ BOOST_AUTO_TEST_CASE( claim_account_apply )
     tx.operations.push_back( op );
     tx.set_expiration( db->head_block_time() + HIVE_MAX_TIME_UNTIL_EXPIRATION );
     sign( tx, alice_private_key );
-    BOOST_REQUIRE_THROW( db->push_transaction( tx, 0 ), fc::exception );
+    BOOST_REQUIRE_THROW( push_transaction( tx, 0 ), fc::exception );
     validate_database();
   }
   FC_LOG_AND_RETHROW()
@@ -8871,7 +9393,7 @@ BOOST_AUTO_TEST_CASE( create_claimed_account_apply )
     tx.operations.push_back( op );
     tx.set_expiration( db->head_block_time() + HIVE_MAX_TIME_UNTIL_EXPIRATION );
     sign( tx, alice_private_key );
-    BOOST_REQUIRE_THROW( db->push_transaction( tx, 0 ), fc::assert_exception );
+    BOOST_REQUIRE_THROW( push_transaction( tx, 0 ), fc::assert_exception );
     validate_database();
 
     BOOST_TEST_MESSAGE( "--- Test failure creating account with non-existent account auth" );
@@ -8887,7 +9409,7 @@ BOOST_AUTO_TEST_CASE( create_claimed_account_apply )
     op.owner = authority( 1, "bob", 1 );
     tx.clear();
     sign( tx, alice_private_key );
-    BOOST_REQUIRE_THROW( db->push_transaction( tx, 0 ), fc::exception );
+    BOOST_REQUIRE_THROW( push_transaction( tx, 0 ), fc::exception );
     validate_database();
 
 
@@ -8896,7 +9418,7 @@ BOOST_AUTO_TEST_CASE( create_claimed_account_apply )
     tx.clear();
     tx.operations.push_back( op );
     sign( tx, alice_private_key );
-    db->push_transaction( tx, 0 );
+    push_transaction( tx, 0 );
 
     const auto& bob = db->get_account( "bob" );
     const auto& bob_auth = db->get< account_authority_object, by_account >( "bob" );
@@ -8926,7 +9448,7 @@ BOOST_AUTO_TEST_CASE( create_claimed_account_apply )
     tx.signatures.clear();
     tx.set_expiration( db->head_block_time() + HIVE_MAX_TIME_UNTIL_EXPIRATION );
     sign( tx, alice_private_key );
-    BOOST_REQUIRE_THROW( db->push_transaction( tx, 0 ), fc::exception );
+    BOOST_REQUIRE_THROW( push_transaction( tx, 0 ), fc::exception );
     validate_database();
 
 
@@ -8944,7 +9466,7 @@ BOOST_AUTO_TEST_CASE( create_claimed_account_apply )
     op.new_account_name = "charlie";
     tx.clear();
     tx.operations.push_back( op );
-    db->push_transaction( tx, 0 );
+    push_transaction( tx, 0 );
 
     BOOST_REQUIRE( !db->get_account( "charlie" ).has_recovery_account() );
     validate_database();
@@ -9003,25 +9525,25 @@ BOOST_AUTO_TEST_CASE( account_auth_tests )
     tx.set_expiration( db->head_block_time() + HIVE_MAX_TIME_UNTIL_EXPIRATION );
     tx.signatures.clear();
     sign( tx, bob_active_private_key );
-    db->push_transaction( tx, 0 );
+    push_transaction( tx, 0 );
 
     generate_block();
     tx.set_expiration( db->head_block_time() + HIVE_MAX_TIME_UNTIL_EXPIRATION );
     tx.signatures.clear();
     sign( tx, bob_posting_private_key );
-    HIVE_REQUIRE_THROW( db->push_transaction( tx, 0 ), tx_missing_active_auth );
+    HIVE_REQUIRE_THROW( push_transaction( tx, 0 ), tx_missing_active_auth );
 
     generate_block();
     tx.set_expiration( db->head_block_time() + HIVE_MAX_TIME_UNTIL_EXPIRATION );
     tx.signatures.clear();
     sign( tx, charlie_active_private_key );
-    HIVE_REQUIRE_THROW( db->push_transaction( tx, 0 ), tx_missing_active_auth );
+    HIVE_REQUIRE_THROW( push_transaction( tx, 0 ), tx_missing_active_auth );
 
     generate_block();
     tx.set_expiration( db->head_block_time() + HIVE_MAX_TIME_UNTIL_EXPIRATION );
     tx.signatures.clear();
     sign( tx, charlie_posting_private_key );
-    HIVE_REQUIRE_THROW( db->push_transaction( tx, 0 ), tx_missing_active_auth );
+    HIVE_REQUIRE_THROW( push_transaction( tx, 0 ), tx_missing_active_auth );
 
     custom_json_operation json;
     json.required_posting_auths.insert( "alice" );
@@ -9030,25 +9552,25 @@ BOOST_AUTO_TEST_CASE( account_auth_tests )
     tx.signatures.clear();
     tx.operations.push_back( json );
     sign( tx, bob_active_private_key );
-    HIVE_REQUIRE_THROW( db->push_transaction( tx, 0 ), tx_missing_posting_auth );
+    HIVE_REQUIRE_THROW( push_transaction( tx, 0 ), tx_missing_posting_auth );
 
     generate_block();
     tx.set_expiration( db->head_block_time() + HIVE_MAX_TIME_UNTIL_EXPIRATION );
     tx.signatures.clear();
     sign( tx, bob_posting_private_key );
-    db->push_transaction( tx, 0 );
+    push_transaction( tx, 0 );
 
     generate_block();
     tx.set_expiration( db->head_block_time() + HIVE_MAX_TIME_UNTIL_EXPIRATION );
     tx.signatures.clear();
     sign( tx, charlie_active_private_key );
-    HIVE_REQUIRE_THROW( db->push_transaction( tx, 0 ), tx_missing_posting_auth );
+    HIVE_REQUIRE_THROW( push_transaction( tx, 0 ), tx_missing_posting_auth );
 
     generate_block();
     tx.set_expiration( db->head_block_time() + HIVE_MAX_TIME_UNTIL_EXPIRATION );
     tx.signatures.clear();
     sign( tx, charlie_posting_private_key );
-    db->push_transaction( tx, 0 );
+    push_transaction( tx, 0 );
   }
   FC_LOG_AND_RETHROW()
 }
@@ -9362,7 +9884,7 @@ BOOST_AUTO_TEST_CASE( account_update2_apply )
     tx.operations.push_back( op );
     tx.set_expiration( db->head_block_time() + HIVE_MAX_TIME_UNTIL_EXPIRATION );
     sign( tx, alice_private_key );
-    db->push_transaction( tx, 0 );
+    push_transaction( tx, 0 );
 
     const account_object& acct = db->get_account( "alice" );
     const account_authority_object& acct_auth = db->get< account_authority_object, by_account >( "alice" );
@@ -9386,7 +9908,7 @@ BOOST_AUTO_TEST_CASE( account_update2_apply )
     op.account = "bob";
     tx.operations.push_back( op );
     sign( tx, new_private_key );
-    HIVE_REQUIRE_THROW( db->push_transaction( tx, 0 ), fc::exception )
+    HIVE_REQUIRE_THROW( push_transaction( tx, 0 ), fc::exception )
     validate_database();
 
 
@@ -9399,7 +9921,7 @@ BOOST_AUTO_TEST_CASE( account_update2_apply )
     op.posting->add_authorities( "dave", 1 );
     tx.operations.push_back( op );
     sign( tx, new_private_key );
-    HIVE_REQUIRE_THROW( db->push_transaction( tx, 0 ), fc::exception );
+    HIVE_REQUIRE_THROW( push_transaction( tx, 0 ), fc::exception );
     validate_database();
   }
   FC_LOG_AND_RETHROW()

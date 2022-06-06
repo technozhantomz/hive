@@ -376,10 +376,12 @@ namespace hive { namespace protocol {
 
   void pow_operation::validate()const
   {
+#ifndef HIVE_CONVERTER_BUILD
     props.validate< true >();
     validate_account_name( worker_account );
     FC_ASSERT( work_input() == work.input, "Determninistic input does not match recorded input" );
     work.validate();
+#endif /// HIVE_CONVERTER_BUILD
   }
 
   struct pow2_operation_validate_visitor
@@ -395,8 +397,10 @@ namespace hive { namespace protocol {
 
   void pow2_operation::validate()const
   {
+#ifndef HIVE_CONVERTER_BUILD
     props.validate< true >();
     work.visit( pow2_operation_validate_visitor() );
+#endif /// HIVE_CONVERTER_BUILD
   }
 
   struct pow2_operation_get_required_active_visitor
@@ -515,7 +519,7 @@ namespace hive { namespace protocol {
             ),
           "Limit order must be for the HIVE:HBD or SMT:(HIVE/HBD) market" );
 
-    (amount_to_sell / min_to_receive).validate();
+    price( amount_to_sell, min_to_receive ).validate();
   }
 
   void limit_order_create2_operation::validate()const

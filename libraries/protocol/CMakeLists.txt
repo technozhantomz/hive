@@ -27,40 +27,40 @@ generate_get_config(
 
 #############
 
+SET( SOURCES testnet_blockchain_configuration.cpp
+   smt_operations.cpp
+   hive_operations.cpp
+   sps_operations.cpp
+   hive_required_actions.cpp
+   hive_optional_actions.cpp
+   types.cpp
+   schema_types.cpp
+   authority.cpp
+   operations.cpp
+   sign_state.cpp
+   transaction.cpp
+   block.cpp
+   asset.cpp
+   version.cpp
+   misc_utilities.cpp
+   forward_impacted.cpp
+   signed_transaction_transporter.cpp
+   ${GET_CONFIG_CPP}
+   ${HEADERS}
+   ${hardfork_hpp_file}
+   "${CMAKE_CURRENT_BINARY_DIR}/include/hive/protocol/hardfork.hpp"
+)
+
 ## SORT .cpp by most likely to change / break compile
-add_library( hive_protocol
-
-             testnet_blockchain_configuration.cpp
-             smt_operations.cpp
-             hive_operations.cpp
-             sps_operations.cpp
-             hive_required_actions.cpp
-             hive_optional_actions.cpp
-             types.cpp
-             schema_types.cpp
-             authority.cpp
-             operations.cpp
-             sign_state.cpp
-             transaction.cpp
-             block.cpp
-             asset.cpp
-             version.cpp
-             ${GET_CONFIG_CPP}
-
-             ${HEADERS}
-             ${hardfork_hpp_file}
-             "${CMAKE_CURRENT_BINARY_DIR}/include/hive/protocol/hardfork.hpp"
-           )
+add_library( hive_protocol STATIC ${SOURCES} )
 
 target_link_libraries( hive_protocol hive_schema fc )
+
 target_include_directories( hive_protocol
                             PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include" "${CMAKE_CURRENT_BINARY_DIR}/include" )
 
 if( CLANG_TIDY_EXE )
-   set_target_properties(
-      hive_protocol PROPERTIES
-      CXX_CLANG_TIDY "${DO_CLANG_TIDY}"
-   )
+   set_target_properties( hive_protocol PROPERTIES CXX_CLANG_TIDY "${DO_CLANG_TIDY}" )
 endif( CLANG_TIDY_EXE )
 
 INSTALL( TARGETS

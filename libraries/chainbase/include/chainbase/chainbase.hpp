@@ -198,7 +198,6 @@ namespace chainbase {
     * CHAINBASE_OBJECT( account_object ) or
     * CHAINBASE_OBJECT( dynamic_global_property_object, true )
     * first parameter is a class name, second (true or false, default false) tells if default constructor should be allowed
-    * Note that with MIRA enabled default constructors will be allowed anyway as it uses them during unpacking of object contents.
     */
   #define CHAINBASE_OBJECT( ... ) BOOST_PP_OVERLOAD(CHAINBASE_OBJECT_,__VA_ARGS__)(__VA_ARGS__)
 
@@ -250,23 +249,27 @@ namespace chainbase {
     * In C++ the only way to implement finally is to create a class
     * with a destructor, so that's what we do here.
     */
+  template <typename IntType>
   class int_incrementer
   {
     public:
-      int_incrementer( int32_t& target ) : _target(target)
-      { ++_target; }
-
-      int_incrementer( int_incrementer& ii ) : _target( ii._target )
-      { ++_target; }
-
+      int_incrementer( IntType& target) : _target(target)
+    {
+      ++_target;
+      _start_locking = fc::time_point::now();
+    }
+      int_incrementer( int_incrementer& ii) : _target(ii._target), _start_locking(ii._start_locking) { ++_target; }
       ~int_incrementer()
-      { --_target; }
-
-      int32_t get()const
-      { return _target; }
+      {
+        --_target;
+        fc::microseconds lock_duration = fc::time_point::now() - _start_locking;
+        fc_wlog(fc::logger::get("chainlock"), "Took ${held}µs to get and release chainbase_lock", ("held", lock_duration.count()));
+      }
+      int32_t get()const { return _target; }
 
     private:
-      int32_t& _target;
+      IntType& _target;
+      fc::time_point _start_locking;
   };
 
   /**
@@ -917,7 +920,7 @@ namespace chainbase {
 
           vector< std::unique_ptr<abstract_session> > _index_sessions;
           int64_t _revision = -1;
-          int_incrementer _session_incrementer;
+          int_incrementer<int32_t> _session_incrementer;
       };
 
       session start_undo_session();
@@ -946,9 +949,12 @@ namespace chainbase {
         _index_types.back()->add_index( *this );
       }
 
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wnonnull"
       auto get_segment_manager() -> decltype( ((bip::managed_mapped_file*)nullptr)->get_segment_manager()) {
         return _segment->get_segment_manager();
       }
+#pragma GCC diagnostic pop
 
       unsigned long long get_total_system_memory() const
       {
@@ -1116,28 +1122,28 @@ namespace chainbase {
       }
 
       template< typename Lambda >
-      auto with_read_lock( Lambda&& callback, uint64_t wait_micro = 1000000 ) -> decltype( (*(Lambda*)nullptr)() )
+      auto with_read_lock( Lambda&& callback, fc::microseconds wait_for_microseconds = fc::microseconds() ) -> decltype( (*(Lambda*)nullptr)() )
       {
-#ifndef ENABLE_STD_ALLOCATOR
-        read_lock lock( _rw_lock, bip::defer_lock_type() );
-#else
-        read_lock lock( _rw_lock, boost::defer_lock_t() );
-#endif
+        fc_wlog(fc::logger::get("chainlock"), "trying to get chainbase_read_lock: read_lock_count=${_read_lock_count} write_lock_count=${_write_lock_count}", 
+                ("_read_lock_count", _read_lock_count.load())("_write_lock_count", _write_lock_count.load()));
+        read_lock lock(_rw_lock, boost::defer_lock_t());
 
 #ifdef CHAINBASE_CHECK_LOCKING
         BOOST_ATTRIBUTE_UNUSED
-        int_incrementer ii( _read_lock_count );
+        int_incrementer<std::atomic<int32_t>> ii(_read_lock_count);
 #endif
 
-        if( !wait_micro )
-        {
+        if (wait_for_microseconds == fc::microseconds())
           lock.lock();
-        }
-        else
+        else if (!lock.try_lock_for(boost::chrono::microseconds(wait_for_microseconds.count())))
         {
-          if( !lock.timed_lock( boost::posix_time::microsec_clock::universal_time() + boost::posix_time::microseconds( wait_micro ) ) )
-            CHAINBASE_THROW_EXCEPTION( lock_exception() );
+          fc_wlog(fc::logger::get("chainlock"),"timedout getting chainbase_read_lock: read_lock_count=${_read_lock_count} write_lock_count=${_write_lock_count}",
+                  ("_read_lock_count", _read_lock_count.load())("_write_lock_count", _write_lock_count.load()));
+          CHAINBASE_THROW_EXCEPTION( lock_exception() );
         }
+
+        fc_dlog(fc::logger::get("chainlock"), "_read_lock_count=${_read_lock_count}", 
+                ("_read_lock_count", _read_lock_count.load()));
 
         return callback();
       }
@@ -1145,13 +1151,17 @@ namespace chainbase {
       template< typename Lambda >
       auto with_write_lock( Lambda&& callback ) -> decltype( (*(Lambda*)nullptr)() )
       {
-        write_lock lock( _rw_lock, boost::defer_lock_t() );
+        fc_wlog(fc::logger::get("chainlock"), "trying to get chainbase_write_lock: read_lock_count=${_read_lock_count} write_lock_count=${_write_lock_count}", 
+                ("_read_lock_count", _read_lock_count.load())("_write_lock_count", _write_lock_count.load()));
+        write_lock lock(_rw_lock, boost::defer_lock_t());
 #ifdef CHAINBASE_CHECK_LOCKING
         BOOST_ATTRIBUTE_UNUSED
-        int_incrementer ii( _write_lock_count );
+        int_incrementer<std::atomic<int32_t>> ii(_write_lock_count);
 #endif
 
         lock.lock();
+        fc_wlog(fc::logger::get("chainlock"),"got chainbase_write_lock: read_lock_count=${_read_lock_count} write_lock_count=${_write_lock_count}",
+                ("_read_lock_count", _read_lock_count.load())("_write_lock_count", _write_lock_count.load()));
 
         return callback();
       }
@@ -1231,8 +1241,8 @@ namespace chainbase {
 
       bfs::path                                                   _data_dir;
 
-      int32_t                                                     _read_lock_count = 0;
-      int32_t                                                     _write_lock_count = 0;
+      std::atomic<int32_t>                                        _read_lock_count = {0};
+      std::atomic<int32_t>                                        _write_lock_count = {0};
       bool                                                        _enable_require_locking = false;
 
       bool                                                        _is_open = false;

@@ -131,7 +131,7 @@ struct legacy_signed_block
 
     for( const auto& t : transactions )
     {
-      b.transactions.push_back( signed_transaction( t ) );
+      b.transactions.push_back( signed_transaction_transporter( signed_transaction( t ), serialization_mode_controller::get_current_pack() ) );
     }
 
     return b;
@@ -150,13 +150,6 @@ struct legacy_signed_block
 };
 
 } } } // hive::plugins::condenser_api
-
-namespace fc {
-
-void to_variant( const hive::plugins::condenser_api::legacy_block_header_extensions&, fc::variant& );
-void from_variant( const fc::variant&, hive::plugins::condenser_api::legacy_block_header_extensions& );
-
-}
 
 FC_REFLECT( hive::plugins::condenser_api::legacy_signed_transaction,
         (ref_block_num)(ref_block_prefix)(expiration)(operations)(extensions)(signatures)(transaction_id)(block_num)(transaction_num) )

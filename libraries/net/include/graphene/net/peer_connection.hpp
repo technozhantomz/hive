@@ -221,6 +221,8 @@ namespace graphene { namespace net
 
       /// blockchain synchronization state data
       /// @{
+      uint32_t first_id_block_number = 0; //block number of first item in ids_of_items_being_processed
+      uint32_t last_requested_block_number_for_peers_on_this_fork = 0; //one block before starting block number to search peer's ids for sync blocks to fetch
       boost::container::deque<item_hash_t> ids_of_items_to_get; /// id of items in the blockchain that this peer has told us about
       std::set<item_hash_t> ids_of_items_being_processed; /// list of all items this peer has offered use that we've already handed to the client but the client hasn't finished processing
       uint32_t number_of_unfetched_item_ids = 0; /// number of items in the blockchain that follow ids_of_items_to_get but the peer hasn't yet told us their ids
@@ -233,7 +235,7 @@ namespace graphene { namespace net
       fc::time_point_sec last_block_time_delegate_has_seen;
       bool inhibit_fetching_sync_blocks = false;
       /// @}
-
+      void reset_id_search_for_peer() { last_requested_block_number_for_peers_on_this_fork = first_id_block_number - 1; }
       /// latency timing data
       std::unordered_map< item_hash_t, fc::time_point > pending_item_request_times;
       /// @}
@@ -302,7 +304,7 @@ namespace graphene { namespace net
       fc::time_point get_last_message_sent_time() const;
       fc::time_point get_last_message_received_time() const;
 
-      fc::optional<fc::ip::endpoint> get_remote_endpoint();
+      fc::optional<fc::ip::endpoint> get_remote_endpoint() const;
       fc::ip::endpoint get_local_endpoint();
       void set_remote_endpoint(fc::optional<fc::ip::endpoint> new_remote_endpoint);
 
@@ -317,6 +319,7 @@ namespace graphene { namespace net
       bool is_inventory_advertised_to_us_list_full() const;
       bool performing_firewall_check() const;
       fc::optional<fc::ip::endpoint> get_endpoint_for_connecting() const;
+      fc::optional<fc::ip::endpoint> get_endpoint_for_db() const;
     private:
       void send_queued_messages_task();
       void accept_connection_task();

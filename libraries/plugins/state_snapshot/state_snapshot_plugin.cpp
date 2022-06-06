@@ -26,7 +26,7 @@
 #include <rocksdb/sst_file_reader.h>
 #include <rocksdb/utilities/write_batch_with_index.h>
 
-#include <boost/bind.hpp>
+#include <boost/bind/bind.hpp>
 #include <boost/type.hpp>
 #include <boost/algorithm/string.hpp>
 #include <boost/asio/io_service.hpp>
@@ -1374,7 +1374,9 @@ void state_snapshot_plugin::impl::load_snapshot(const std::string& snapshotName,
   auto blockNo = _mainDb.head_block_num();
 
   ilog("Setting chainbase revision to ${b} block... Loaded irreversible block is: ${lib}.", ("b", blockNo)("lib", last_irr_block));
+
   _mainDb.set_revision(blockNo);
+  _mainDb.load_state_initial_data(openArgs);
 
   const auto& measure = dumper.measure(blockNo, [](benchmark_dumper::index_memory_details_cntr_t&, bool) {});
   ilog("State snapshot load. Elapsed time: ${rt} ms (real), ${ct} ms (cpu). Memory usage: ${cm} (current), ${pm} (peak) kilobytes.",
@@ -1392,11 +1394,19 @@ void state_snapshot_plugin::impl::load_snapshot(const std::string& snapshotName,
 
 void state_snapshot_plugin::impl::process_explicit_snapshot_requests(const hive::chain::open_args& openArgs)
   {
-  if(_do_immediate_load)
-    load_snapshot(_snapshot_name, openArgs);
+    if(_do_immediate_load)
+    {
+      hive::notify_hived_status("loading snapshot");
+      load_snapshot(_snapshot_name, openArgs);
+      hive::notify_hived_status("finished loading snapshot");
+    }
 
-  if(_do_immediate_dump)
-    prepare_snapshot(_snapshot_name);
+    if(_do_immediate_dump)
+    {
+      hive::notify_hived_status("dumping snapshot");
+      prepare_snapshot(_snapshot_name);
+      hive::notify_hived_status("finished dumping snapshot");
+    }
   }
 
 state_snapshot_plugin::state_snapshot_plugin()
@@ -1436,7 +1446,7 @@ void state_snapshot_plugin::plugin_startup()
 
 void state_snapshot_plugin::plugin_shutdown()
   {
-  ilog("Shutting down account_history_rocksdb_plugin...");
+  ilog("Shutting down state_snapshot_plugin...");
   /// TO DO ADD CHECK DEFERRING SHUTDOWN WHEN SNAPSHOT IS GENERATED/LOADED.
   }
 

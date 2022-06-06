@@ -681,7 +681,7 @@ namespace hive { namespace protocol {
     void  validate()const;
     void  get_required_active_authorities( flat_set<account_name_type>& a )const{ a.insert(owner); }
 
-    price             get_price()const { return amount_to_sell / min_to_receive; }
+    price             get_price()const { return price( amount_to_sell, min_to_receive ); }
 
     pair< asset_symbol_type, asset_symbol_type > get_market()const
     {
@@ -1123,6 +1123,49 @@ namespace hive { namespace protocol {
 
   } } // hive::protocol
 
+
+namespace fc
+{
+  using hive::protocol::comment_options_extension;
+  template<>
+  struct serialization_functor< comment_options_extension >
+  {
+    bool operator()( const fc::variant& v, comment_options_extension& s ) const
+    {
+      return extended_serialization_functor< comment_options_extension >().serialize( v, s );
+    }
+  };
+
+  template<>
+  struct variant_creator_functor< comment_options_extension >
+  {
+    template<typename T>
+    fc::variant operator()( const T& v ) const
+    {
+      return extended_variant_creator_functor< comment_options_extension >().create( v );
+    }
+  };
+
+  using hive::protocol::pow2_work;
+  template<>
+  struct serialization_functor< pow2_work >
+  {
+    bool operator()( const fc::variant& v, pow2_work& s ) const
+    {
+      return extended_serialization_functor< pow2_work >().serialize( v, s );
+    }
+  };
+
+  template<>
+  struct variant_creator_functor< pow2_work >
+  {
+    template<typename T>
+    fc::variant operator()( const T& v ) const
+    {
+      return extended_variant_creator_functor< pow2_work >().create( v );
+    }
+  };
+}
 
 FC_REFLECT( hive::protocol::transfer_to_savings_operation, (from)(to)(amount)(memo) )
 FC_REFLECT( hive::protocol::transfer_from_savings_operation, (from)(request_id)(to)(amount)(memo) )

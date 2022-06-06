@@ -9,10 +9,13 @@
 #include <hive/plugins/debug_node/debug_node_plugin.hpp>
 
 #include <hive/utilities/key_conversion.hpp>
+#include <hive/utilities/tempdir.hpp>
 
 #include <hive/plugins/block_api/block_api_plugin.hpp>
-#include <hive/plugins/condenser_api/condenser_api_legacy_asset.hpp>
+#include <hive/protocol/asset.hpp>
+#include <hive/plugins/account_history_rocksdb/account_history_rocksdb_plugin.hpp>
 #include <hive/plugins/database_api/database_api_plugin.hpp>
+#include <hive/plugins/rc/rc_plugin.hpp>
 
 #include <fc/network/http/connection.hpp>
 #include <fc/network/ip.hpp>
@@ -87,23 +90,17 @@ extern uint32_t HIVE_TESTING_GENESIS_TIMESTAMP;
       << req_throw_info << std::endl;                  \
 }
 
-#define HIVE_REQUIRE_ASSERT( expr, assert_test )                  \
+#define HIVE_REQUIRE_EXCEPTION( expr, assert_test, ex_type )      \
 do {                                                              \
   bool flag = fc::enable_record_assert_trip;                      \
   fc::enable_record_assert_trip = true;                           \
-  HIVE_REQUIRE_THROW( expr, fc::assert_exception );               \
+  HIVE_REQUIRE_THROW( expr, ex_type );                            \
   BOOST_REQUIRE_EQUAL( fc::last_assert_expression, assert_test ); \
   fc::enable_record_assert_trip = flag;                           \
 } while(false)
 
-#define HIVE_REQUIRE_CHAINBASE_ASSERT( expr, assert_msg )         \
-do {                                                              \
-  bool flag = fc::enable_record_assert_trip;                      \
-  fc::enable_record_assert_trip = true;                           \
-  HIVE_REQUIRE_THROW( expr, fc::exception );                      \
-  BOOST_REQUIRE_EQUAL( fc::last_assert_expression, assert_msg );  \
-  fc::enable_record_assert_trip = flag;                           \
-} while(false)
+#define HIVE_REQUIRE_ASSERT( expr, assert_test ) HIVE_REQUIRE_EXCEPTION( expr, assert_test, fc::assert_exception )
+#define HIVE_REQUIRE_CHAINBASE_ASSERT( expr, assert_msg ) HIVE_REQUIRE_EXCEPTION( expr, assert_msg, fc::exception )
 
 #define REQUIRE_OP_VALIDATION_FAILURE_2( op, field, value, exc_type ) \
 { \
@@ -127,7 +124,7 @@ do {                                                              \
 #define REQUIRE_THROW_WITH_VALUE( op, field, value ) \
   REQUIRE_THROW_WITH_VALUE_2( op, field, value, fc::exception )
 
-///This simply resets v back to its default-constructed value. Requires v to have a working assingment operator and
+///This simply resets v back to its default-constructed value. Requires v to have a working assignment operator and
 /// default constructor.
 #define RESET(v) v = decltype(v)()
 ///This allows me to build consecutive test cases. It's pretty ugly, but it works well enough for unit tests.
@@ -148,6 +145,17 @@ do {                                                              \
 #define ACTORS(names) BOOST_PP_SEQ_FOR_EACH(ACTORS_IMPL, ~, names) \
   validate_database();
 
+
+// Generate accounts with the account creation fee instead of vesting 100 hive
+#define ACTOR_DEFAULT_FEE(name) \
+  PREP_ACTOR(name) \
+  const auto& name = account_create_default_fee(BOOST_PP_STRINGIZE(name), name ## _public_key, name ## _post_key.get_public_key()); \
+  account_id_type name ## _id = name.get_id(); (void)name ## _id;
+
+#define ACTORS_DEFAULT_FEE_IMPL(r, data, elem) ACTOR_DEFAULT_FEE(elem)
+#define ACTORS_DEFAULT_FEE(names) BOOST_PP_SEQ_FOR_EACH(ACTORS_DEFAULT_FEE_IMPL, ~, names) \
+  validate_database();
+
 #define PREP_ACTOR_EXT(object, name) \
   fc::ecc::private_key name ## _private_key = object.generate_private_key(BOOST_PP_STRINGIZE(name));   \
   fc::ecc::private_key name ## _post_key = object.generate_private_key(std::string( BOOST_PP_STRINGIZE(name) ) + "_post" ); \
@@ -166,7 +174,7 @@ do {                                                              \
   asset_symbol_type name ## _symbol = get_new_smt_symbol( decimal_places, db );
 
 #define ASSET( s ) \
-  hive::plugins::condenser_api::legacy_asset::from_string( s ).to_asset()
+  hive::protocol::legacy_asset::from_string( s ).to_asset()
 
 #define FUND( account_name, amount ) \
   fund( account_name, amount ); \
@@ -188,27 +196,43 @@ TX.sign( KEY, db->get_chain_id(), fc::ecc::bip_0062 );
 { \
   signed_transaction tx; \
   OP2TX(OP,tx,KEY) \
-  db->push_transaction( tx, 0 ); \
+  push_transaction( tx, 0 ); \
 }
 
 #define PUSH_OP_TWICE(OP,KEY) \
 { \
   signed_transaction tx; \
   OP2TX(OP,tx,KEY) \
-  db->push_transaction( tx, 0 ); \
-  db->push_transaction( tx, database::skip_transaction_dupe_check ); \
+  push_transaction( tx, 0 ); \
+  push_transaction( tx, database::skip_transaction_dupe_check ); \
 }
 
 #define FAIL_WITH_OP(OP,KEY,EXCEPTION) \
 { \
   signed_transaction tx; \
   OP2TX(OP,tx,KEY) \
-  HIVE_REQUIRE_THROW( db->push_transaction( tx, 0 ), EXCEPTION ); \
+  HIVE_REQUIRE_THROW( push_transaction( tx, 0 ), EXCEPTION ); \
 }
 
 namespace hive { namespace chain {
 
 using namespace hive::protocol;
+
+struct autoscope
+{
+  std::function< void() > finalizer;
+  autoscope( const std::function< void() >& f ) : finalizer( f ) {}
+  ~autoscope() { finalizer(); }
+};
+//applies HF25 values related to comment cashout instead those default (short) for testnet
+//call configuration_data.reset() manually at the end of test (f.e. in fixture destructor) if
+//you pass false to auto_reset, otherwise the setting will persist influencing other tests
+autoscope set_mainnet_cashout_values( bool auto_reset = true );
+
+//common code for preparing arguments and data path
+//caller needs to register plugins and call initialize() on given application object
+//returned path should be passed as open_database() call parameter
+fc::path common_init( const std::function< void( appbase::application& app, int argc, char** argv ) >& app_initializer );
 
 struct database_fixture {
   // the reason we use an app is to exercise the indexes of built-in
@@ -224,7 +248,10 @@ struct database_fixture {
   uint32_t default_skip = 0 | database::skip_undo_history_check | database::skip_authority_check;
   fc::ecc::canonical_signature_type default_sig_canon = fc::ecc::fc_canonical;
 
-  plugins::debug_node::debug_node_plugin* db_plugin;
+  typedef plugins::account_history_rocksdb::account_history_rocksdb_plugin ah_plugin_type;
+  ah_plugin_type* ah_plugin = nullptr;
+  plugins::debug_node::debug_node_plugin* db_plugin = nullptr;
+  plugins::rc::rc_plugin* rc_plugin = nullptr;
 
   optional<fc::temp_directory> data_dir;
   bool skip_key_index_test = false;
@@ -240,7 +267,8 @@ struct database_fixture {
   static const uint16_t shared_file_size_in_mb_64 = 64;
   static const uint16_t shared_file_size_in_mb_512 = 512;
 
-  void open_database( uint16_t shared_file_size_in_mb = shared_file_size_in_mb_64 );
+  void open_database( const fc::path& _data_dir,
+                      uint16_t shared_file_size_in_mb = shared_file_size_in_mb_64 );
   void generate_block(uint32_t skip = 0,
                       const fc::ecc::private_key& key = generate_private_key("init_key"),
                       int miss_blocks = 0);
@@ -278,6 +306,12 @@ struct database_fixture {
     const public_key_type& post_key
   );
 
+  const account_object& account_create_default_fee(
+    const string& name,
+    const public_key_type& key,
+    const public_key_type& post_key
+  );
+
   const account_object& account_create(
     const string& name,
     const public_key_type& key
@@ -292,6 +326,7 @@ struct database_fixture {
   );
 
   void push_transaction( const operation& op, const fc::ecc::private_key& key );
+  void push_transaction( const signed_transaction& trx, uint32_t skip = database::skip_nothing );
 
   void fund( const string& account_name, const share_type& amount = 500000 );
   void fund( const string& account_name, const asset& amount, bool update_print_rate = true );
@@ -347,6 +382,18 @@ struct hardfork_database_fixture : public clean_database_fixture
   virtual ~hardfork_database_fixture();
 };
 
+struct genesis_database_fixture : public clean_database_fixture
+{
+  genesis_database_fixture( uint16_t shared_file_size_in_mb = shared_file_size_in_mb_512 );
+  virtual ~genesis_database_fixture();
+};
+
+struct curation_database_fixture : public clean_database_fixture
+{
+  curation_database_fixture( uint16_t shared_file_size_in_mb = shared_file_size_in_mb_512 );
+  virtual ~curation_database_fixture();
+};
+
 struct cluster_database_fixture
 {
   uint16_t shared_file_size_in_mb;
@@ -358,8 +405,13 @@ struct cluster_database_fixture
   cluster_database_fixture( uint16_t _shared_file_size_in_mb = database_fixture::shared_file_size_in_mb_512 );
   virtual ~cluster_database_fixture();
 
-  void execute_24( content_method content );
-  void execute_25( content_method content );
+  template<uint8_t hardfork>
+  void execute_hardfork( content_method content )
+  {
+    ptr_hardfork_database_fixture executor( new hardfork_database_fixture( shared_file_size_in_mb, hardfork ) );
+    content( executor );
+  }
+
 };
 
 struct live_database_fixture : public database_fixture

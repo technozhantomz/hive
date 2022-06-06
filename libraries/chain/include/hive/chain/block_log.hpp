@@ -2,6 +2,14 @@
 #include <fc/filesystem.hpp>
 #include <hive/protocol/block.hpp>
 
+extern "C"
+{
+  struct ZSTD_CCtx_s;
+  typedef struct ZSTD_CCtx_s ZSTD_CCtx;
+  struct ZSTD_DCtx_s;
+  typedef struct ZSTD_DCtx_s ZSTD_DCtx;
+}
+
 namespace hive { namespace chain {
 
   using namespace hive::protocol;
@@ -35,40 +43,62 @@ namespace hive { namespace chain {
 
   class block_log {
     public:
-      typedef uint8_t block_flags_t;
+      // in the block log (and index), the positions are stored as 64-bit integers.  We'll use the lower 
+      // 48-bits as the actual position, and the upper 16 as flags that tell us how the block is stored
+      // hi    lo|hi    lo|hi      |        |        |        |        |      lo|
+      // c......d|<-dict->|<--------------------- position -------------------->|
+      // c    = block_flags, one bit specifying the compression method, or uncompressed
+      //        (this was briefly two bits when we were testing other compression methods)
+      // d    = one bit, if 1 the block uses a custom compression dictionary
+      // dict = the number specifying the dictionary used to compress the block, if d = 1, otherwise undefined
+      // .    = unused
+      enum class block_flags {
+        uncompressed = 0,
+        zstd = 1 
+      };
+      struct block_attributes_t {
+        block_flags flags = block_flags::uncompressed;
+        fc::optional<uint8_t> dictionary_number;
+      };
 
       block_log();
       ~block_log();
 
-      void open( const fc::path& file );
-
-      void rewrite(const fc::path& inputFile, const fc::path& outputFile, uint32_t maxBlockNo);
+      void open( const fc::path& file, bool read_only = false );
 
       void close();
       bool is_open()const;
 
-      uint64_t append( const signed_block& b );
+      uint64_t append(const signed_block& b);
+      uint64_t append_raw(const char* raw_block_data, size_t raw_block_size, block_attributes_t flags);
+
       void flush();
-      //TODOoptional<std::pair<std::vector<char>, block_flags_t>> read_raw_block_data_by_num(uint32_t block_num) const;
-      optional< signed_block > read_block_by_num( uint32_t block_num )const;
+      std::tuple<std::unique_ptr<char[]>, size_t, block_attributes_t> read_raw_block_data_by_num(uint32_t block_num) const;
+      static std::tuple<std::unique_ptr<char[]>, size_t> decompress_raw_block(std::tuple<std::unique_ptr<char[]>, size_t, block_attributes_t>&& raw_block_data_tuple);
+
+      optional<signed_block> read_block_by_num( uint32_t block_num )const;
+      optional<signed_block_header> read_block_header_by_num( uint32_t block_num )const;
       vector<signed_block> read_block_range_by_num( uint32_t first_block_num, uint32_t count )const;
 
-      /**
-        * Return offset of block in file, or block_log::npos if it does not exist.
-        */
-      uint64_t get_block_pos( uint32_t block_num ) const;
+      std::tuple<std::unique_ptr<char[]>, size_t, block_log::block_attributes_t> read_raw_head_block() const;
       signed_block read_head()const;
       const boost::shared_ptr<signed_block> head() const;
+      void set_compression(bool enabled);
+      void set_compression_level(int level);
 
-      static const uint64_t npos = std::numeric_limits<uint64_t>::max();
-
+      static std::tuple<std::unique_ptr<char[]>, size_t> compress_block_zstd(const char* uncompressed_block_data, size_t uncompressed_block_size, fc::optional<uint8_t> dictionary_number, 
+                                                                             fc::optional<int> compression_level = fc::optional<int>(), 
+                                                                             fc::optional<ZSTD_CCtx*> compression_context = fc::optional<ZSTD_CCtx*>());
+      static std::tuple<std::unique_ptr<char[]>, size_t> decompress_block_zstd(const char* compressed_block_data, size_t compressed_block_size, 
+                                                                               fc::optional<uint8_t> dictionary_number = fc::optional<int>(), 
+                                                                               fc::optional<ZSTD_DCtx*> decompression_context_for_reuse = fc::optional<ZSTD_DCtx*>());
     private:
-      void construct_index( bool resume = false, uint64_t index_pos = 0 );
-
-      std::pair< signed_block, uint64_t > read_block_helper( uint64_t file_pos )const;
-      uint64_t get_block_pos_helper( uint32_t block_num ) const;
+      void construct_index(bool resume = false);
+      static std::tuple<std::unique_ptr<char[]>, size_t> decompress_raw_block(const char* raw_block_data, size_t raw_block_size, block_attributes_t attributes);
 
       std::unique_ptr<detail::block_log_impl> my;
   };
 
 } }
+FC_REFLECT_ENUM(hive::chain::block_log::block_flags, (uncompressed)(zstd))
+FC_REFLECT(hive::chain::block_log::block_attributes_t, (flags)(dictionary_number))

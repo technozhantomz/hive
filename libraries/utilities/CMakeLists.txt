@@ -10,6 +10,7 @@ endif(NOT HIVE_GIT_REVISION_DESCRIPTION)
 file(GLOB HEADERS "include/hive/utilities/*.hpp")
 
 set(sources
+   notifications.cpp
    benchmark_dumper.cpp
    key_conversion.cpp
    string_escape.cpp
@@ -25,7 +26,7 @@ list(APPEND sources "${CMAKE_CURRENT_BINARY_DIR}/git_revision.cpp")
 add_library( hive_utilities
              ${sources}
              ${HEADERS} )
-target_link_libraries( hive_utilities fc )
+target_link_libraries( hive_utilities fc hive_protocol )
 target_include_directories( hive_utilities
                             PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include" )
 if (USE_PCH)

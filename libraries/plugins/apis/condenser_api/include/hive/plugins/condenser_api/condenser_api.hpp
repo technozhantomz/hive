@@ -6,11 +6,10 @@
 #include <hive/plugins/account_history_api/account_history_api.hpp>
 #include <hive/plugins/account_by_key_api/account_by_key_api.hpp>
 #include <hive/plugins/network_broadcast_api/network_broadcast_api.hpp>
-#include <hive/plugins/tags_api/tags_api.hpp>
-#include <hive/plugins/follow_api/follow_api.hpp>
 #include <hive/plugins/reputation_api/reputation_api.hpp>
 #include <hive/plugins/market_history_api/market_history_api.hpp>
 #include <hive/plugins/condenser_api/condenser_api_legacy_objects.hpp>
+#include <hive/plugins/rc_api/rc_api.hpp>
 
 #include <fc/optional.hpp>
 #include <fc/variant.hpp>
@@ -25,26 +24,18 @@ using fc::optional;
 
 using namespace chain;
 
-namespace detail{ class condenser_api_impl; }
-
-struct discussion_index
+//moved from tags_api
+struct vote_state
 {
-  string           category;         /// category by which everything is filtered
-  vector< string > trending;         /// trending posts over the last 24 hours
-  vector< string > payout;           /// pending posts by payout
-  vector< string > payout_comments;  /// pending comments by payout
-  vector< string > trending30;       /// pending lifetime payout
-  vector< string > created;          /// creation date
-  vector< string > responses;        /// creation date
-  vector< string > updated;          /// creation date
-  vector< string > active;           /// last update or reply
-  vector< string > votes;            /// last update or reply
-  vector< string > cashout;          /// last update or reply
-  vector< string > maturing;         /// about to be paid out
-  vector< string > best;             /// total lifetime payout
-  vector< string > hot;              /// total lifetime payout
-  vector< string > promoted;         /// pending lifetime payout
+  string         voter;
+  uint64_t       weight = 0;
+  int64_t        rshares = 0;
+  int16_t        percent = 0;
+  share_type     reputation = 0;
+  time_point_sec time;
 };
+
+namespace detail{ class condenser_api_impl; }
 
 struct api_limit_order_object
 {
@@ -75,22 +66,22 @@ struct api_limit_order_object
 struct api_operation_object
 {
   api_operation_object() {}
-  api_operation_object( const account_history::api_operation_object& obj, const legacy_operation& l_op ) :
+  api_operation_object( const account_history::api_operation_object& obj, const operation& _op ) :
     trx_id( obj.trx_id ),
     block( obj.block ),
     trx_in_block( obj.trx_in_block ),
     virtual_op( obj.virtual_op ),
     timestamp( obj.timestamp ),
-    op( l_op )
+    op( _op )
   {}
 
   transaction_id_type  trx_id;
   uint32_t             block = 0;
   uint32_t             trx_in_block = 0;
   uint32_t             op_in_trx = 0;
-  uint32_t             virtual_op = 0;
+  bool                 virtual_op = false;
   fc::time_point_sec   timestamp;
-  legacy_operation     op;
+  operation            op;
 };
 
 struct api_account_object
@@ -105,6 +96,7 @@ struct api_account_object
     json_metadata( a.json_metadata ),
     posting_json_metadata( a.posting_json_metadata ),
     proxy( a.proxy ),
+    previous_owner_update( a.previous_owner_update ),
     last_owner_update( a.last_owner_update ),
     last_account_update( a.last_account_update ),
     created( a.created ),
@@ -176,6 +168,7 @@ struct api_account_object
   string            posting_json_metadata;
   account_name_type proxy;
 
+  time_point_sec    previous_owner_update;
   time_point_sec    last_owner_update;
   time_point_sec    last_account_update;
 
@@ -259,9 +252,9 @@ struct extended_account : public api_account_object
   map< uint64_t, api_operation_object >   post_history;
   map< uint64_t, api_operation_object >   vote_history;
   map< uint64_t, api_operation_object >   other_history;
-  set< string >                                            witness_votes;
-  vector< tags::tag_count_object >                         tags_usage;
-  vector< follow::reblog_count >                           guest_bloggers;
+  set< string >                           witness_votes;
+  vector< bool >                          tags_usage; // always empty - placeholder (used to hold tags::tag_count_object)
+  vector< bool >                          guest_bloggers; // always empty - placeholder (used to hold follow::reblog_count)
 
   optional< map< uint32_t, api_limit_order_object > >      open_orders;
   optional< vector< string > >                             comments;         /// permlinks for this user
@@ -694,81 +687,17 @@ struct api_proposal_object
   uint64_t          total_votes = 0;
 };
 
-struct tag_index
-{
-  vector< tags::tag_name_type > trending; /// pending payouts
-};
-
-struct api_tag_object
-{
-  api_tag_object( const tags::api_tag_object& o ) :
-    name( o.name ),
-    total_payouts( legacy_asset::from_asset( o.total_payouts ) ),
-    net_votes( o.net_votes ),
-    top_posts( o.top_posts ),
-    comments( o.comments ),
-    trending( o.trending ) {}
-
-  api_tag_object() {}
-
-  string               name;
-  legacy_asset         total_payouts;
-  int32_t              net_votes = 0;
-  uint32_t             top_posts = 0;
-  uint32_t             comments = 0;
-  fc::uint128          trending = 0;
-};
-
-struct state
-{
-  string                                             current_route;
-
-  extended_dynamic_global_properties                 props;
-
-  tag_index                                          tag_idx;
-
-  /**
-    * "" is the global tags::discussion_ index
-    */
-  map< string, discussion_index >                    discussion_idx;
-
-  map< string, api_tag_object >                      tags;
-
-  map< string, extended_account >                    accounts;
-
-  map< string, api_witness_object >                  witnesses;
-  api_witness_schedule_object                        witness_schedule;
-  legacy_price                                       feed_price;
-  string                                             error;
-};
-
 struct scheduled_hardfork
 {
   hardfork_version     hf_version;
   fc::time_point_sec   live_time;
 };
 
-struct account_vote
-{
-  string         authorperm;
-  uint64_t       weight = 0;
-  int64_t        rshares = 0;
-  int16_t        percent = 0;
-  time_point_sec time;
-};
-
-enum withdraw_route_type
-{
-  incoming,
-  outgoing,
-  all
-};
-
 typedef vector< variant > get_version_args;
 
 typedef database_api::get_version_return get_version_return;
 
-typedef map< uint32_t, api_operation_object > get_account_history_return_type;
+typedef map< uint32_t, hive::protocol::serializer_wrapper<api_operation_object> > get_account_history_return_type;
 
 typedef vector< variant > broadcast_transaction_synchronous_args;
 
@@ -861,23 +790,19 @@ struct market_trade
   legacy_asset   open_pays;
 };
 
-struct no_return {};
-using discussion_api_object = no_return;
-using discussion_api_object_collection = no_return;
-using comment_feed_entry = no_return;
-using comment_blog_entry = no_return;
+struct no_return {}; //used by routines moved to Hivemind
 
 #define DEFINE_API_ARGS( api_name, arg_type, return_type )  \
 typedef arg_type api_name ## _args;                         \
 typedef return_type api_name ## _return;
 
 /*               API,                                    args,                return */
-DEFINE_API_ARGS( get_trending_tags,                      vector< variant >,   vector< api_tag_object > )
-DEFINE_API_ARGS( get_state,                              vector< variant >,   state )
+DEFINE_API_ARGS( get_trending_tags,                      vector< variant >,   no_return ) // see Hivemind - placeholder
+DEFINE_API_ARGS( get_state,                              vector< variant >,   no_return ) // see Hivemind - placeholder
 DEFINE_API_ARGS( get_active_witnesses,                   vector< variant >,   vector< account_name_type > )
 DEFINE_API_ARGS( get_block_header,                       vector< variant >,   optional< block_header > )
 DEFINE_API_ARGS( get_block,                              vector< variant >,   optional< legacy_signed_block > )
-DEFINE_API_ARGS( get_ops_in_block,                       vector< variant >,   vector< api_operation_object > )
+DEFINE_API_ARGS( get_ops_in_block,                       vector< variant >,   vector< hive::protocol::serializer_wrapper<api_operation_object> > )
 DEFINE_API_ARGS( get_config,                             vector< variant >,   fc::variant_object )
 DEFINE_API_ARGS( get_dynamic_global_properties,          vector< variant >,   extended_dynamic_global_properties )
 DEFINE_API_ARGS( get_chain_properties,                   vector< variant >,   api_chain_properties )
@@ -910,44 +835,44 @@ DEFINE_API_ARGS( lookup_witness_accounts,                vector< variant >,   ve
 DEFINE_API_ARGS( get_open_orders,                        vector< variant >,   vector< api_limit_order_object > )
 DEFINE_API_ARGS( get_witness_count,                      vector< variant >,   uint64_t )
 DEFINE_API_ARGS( get_transaction_hex,                    vector< variant >,   string )
-DEFINE_API_ARGS( get_transaction,                        vector< variant >,   legacy_signed_transaction )
+DEFINE_API_ARGS( get_transaction,                        vector< variant >,   hive::protocol::serializer_wrapper<annotated_signed_transaction> )
 DEFINE_API_ARGS( get_required_signatures,                vector< variant >,   set< public_key_type > )
 DEFINE_API_ARGS( get_potential_signatures,               vector< variant >,   set< public_key_type > )
 DEFINE_API_ARGS( verify_authority,                       vector< variant >,   bool )
 DEFINE_API_ARGS( verify_account_authority,               vector< variant >,   bool )
-DEFINE_API_ARGS( get_active_votes,                       vector< variant >,   vector< tags::vote_state > )
-DEFINE_API_ARGS( get_account_votes,                      vector< variant >,   vector< account_vote > )
-DEFINE_API_ARGS( get_content,                            vector< variant >,   discussion_api_object )
-DEFINE_API_ARGS( get_content_replies,                    vector< variant >,   discussion_api_object_collection )
-DEFINE_API_ARGS( get_tags_used_by_author,                vector< variant >,   vector< tags::tag_count_object > )
-DEFINE_API_ARGS( get_post_discussions_by_payout,         vector< variant >,   discussion_api_object_collection )
-DEFINE_API_ARGS( get_comment_discussions_by_payout,      vector< variant >,   discussion_api_object_collection )
-DEFINE_API_ARGS( get_discussions_by_trending,            vector< variant >,   discussion_api_object_collection )
-DEFINE_API_ARGS( get_discussions_by_created,             vector< variant >,   discussion_api_object_collection )
-DEFINE_API_ARGS( get_discussions_by_active,              vector< variant >,   discussion_api_object_collection )
-DEFINE_API_ARGS( get_discussions_by_cashout,             vector< variant >,   discussion_api_object_collection )
-DEFINE_API_ARGS( get_discussions_by_votes,               vector< variant >,   discussion_api_object_collection )
-DEFINE_API_ARGS( get_discussions_by_children,            vector< variant >,   discussion_api_object_collection )
-DEFINE_API_ARGS( get_discussions_by_hot,                 vector< variant >,   discussion_api_object_collection )
-DEFINE_API_ARGS( get_discussions_by_feed,                vector< variant >,   discussion_api_object_collection )
-DEFINE_API_ARGS( get_discussions_by_blog,                vector< variant >,   discussion_api_object_collection )
-DEFINE_API_ARGS( get_discussions_by_comments,            vector< variant >,   discussion_api_object_collection )
-DEFINE_API_ARGS( get_discussions_by_promoted,            vector< variant >,   discussion_api_object_collection )
-DEFINE_API_ARGS( get_replies_by_last_update,             vector< variant >,   discussion_api_object_collection )
-DEFINE_API_ARGS( get_discussions_by_author_before_date,  vector< variant >,   discussion_api_object_collection )
+DEFINE_API_ARGS( get_active_votes,                       vector< variant >,   vector< vote_state > )
+DEFINE_API_ARGS( get_account_votes,                      vector< variant >,   no_return ) // see Hivemind - placeholder
+DEFINE_API_ARGS( get_content,                            vector< variant >,   no_return ) // see Hivemind - placeholder
+DEFINE_API_ARGS( get_content_replies,                    vector< variant >,   no_return ) // see Hivemind - placeholder
+DEFINE_API_ARGS( get_tags_used_by_author,                vector< variant >,   no_return ) // see Hivemind - placeholder
+DEFINE_API_ARGS( get_post_discussions_by_payout,         vector< variant >,   no_return ) // see Hivemind - placeholder
+DEFINE_API_ARGS( get_comment_discussions_by_payout,      vector< variant >,   no_return ) // see Hivemind - placeholder
+DEFINE_API_ARGS( get_discussions_by_trending,            vector< variant >,   no_return ) // see Hivemind - placeholder
+DEFINE_API_ARGS( get_discussions_by_created,             vector< variant >,   no_return ) // see Hivemind - placeholder
+DEFINE_API_ARGS( get_discussions_by_active,              vector< variant >,   no_return ) // see Hivemind - placeholder
+DEFINE_API_ARGS( get_discussions_by_cashout,             vector< variant >,   no_return ) // see Hivemind - placeholder
+DEFINE_API_ARGS( get_discussions_by_votes,               vector< variant >,   no_return ) // see Hivemind - placeholder
+DEFINE_API_ARGS( get_discussions_by_children,            vector< variant >,   no_return ) // see Hivemind - placeholder
+DEFINE_API_ARGS( get_discussions_by_hot,                 vector< variant >,   no_return ) // see Hivemind - placeholder
+DEFINE_API_ARGS( get_discussions_by_feed,                vector< variant >,   no_return ) // see Hivemind - placeholder
+DEFINE_API_ARGS( get_discussions_by_blog,                vector< variant >,   no_return ) // see Hivemind - placeholder
+DEFINE_API_ARGS( get_discussions_by_comments,            vector< variant >,   no_return ) // see Hivemind - placeholder
+DEFINE_API_ARGS( get_discussions_by_promoted,            vector< variant >,   no_return ) // see Hivemind - placeholder
+DEFINE_API_ARGS( get_replies_by_last_update,             vector< variant >,   no_return ) // see Hivemind - placeholder
+DEFINE_API_ARGS( get_discussions_by_author_before_date,  vector< variant >,   no_return ) // see Hivemind - placeholder
 DEFINE_API_ARGS( get_account_history,                    vector< variant >,   get_account_history_return_type )
 DEFINE_API_ARGS( broadcast_transaction,                  vector< variant >,   json_rpc::void_type )
 DEFINE_API_ARGS( broadcast_block,                        vector< variant >,   json_rpc::void_type )
-DEFINE_API_ARGS( get_followers,                          vector< variant >,   vector< follow::api_follow_object > )
-DEFINE_API_ARGS( get_following,                          vector< variant >,   vector< follow::api_follow_object > )
-DEFINE_API_ARGS( get_follow_count,                       vector< variant >,   follow::get_follow_count_return )
-DEFINE_API_ARGS( get_feed_entries,                       vector< variant >,   vector< follow::feed_entry > )
-DEFINE_API_ARGS( get_feed,                               vector< variant >,   vector< comment_feed_entry > )
-DEFINE_API_ARGS( get_blog_entries,                       vector< variant >,   vector< follow::blog_entry > )
-DEFINE_API_ARGS( get_blog,                               vector< variant >,   vector< comment_blog_entry > )
+DEFINE_API_ARGS( get_followers,                          vector< variant >,   no_return ) // see Hivemind - placeholder
+DEFINE_API_ARGS( get_following,                          vector< variant >,   no_return ) // see Hivemind - placeholder
+DEFINE_API_ARGS( get_follow_count,                       vector< variant >,   no_return ) // see Hivemind - placeholder
+DEFINE_API_ARGS( get_feed_entries,                       vector< variant >,   no_return ) // see Hivemind - placeholder
+DEFINE_API_ARGS( get_feed,                               vector< variant >,   no_return ) // see Hivemind - placeholder
+DEFINE_API_ARGS( get_blog_entries,                       vector< variant >,   no_return ) // see Hivemind - placeholder
+DEFINE_API_ARGS( get_blog,                               vector< variant >,   no_return ) // see Hivemind - placeholder
 DEFINE_API_ARGS( get_account_reputations,                vector< variant >,   vector< reputation::account_reputation > )
-DEFINE_API_ARGS( get_reblogged_by,                       vector< variant >,   vector< account_name_type > )
-DEFINE_API_ARGS( get_blog_authors,                       vector< variant >,   vector< follow::reblog_count > )
+DEFINE_API_ARGS( get_reblogged_by,                       vector< variant >,   no_return ) // see Hivemind - placeholder
+DEFINE_API_ARGS( get_blog_authors,                       vector< variant >,   no_return ) // see Hivemind - placeholder
 DEFINE_API_ARGS( get_ticker,                             vector< variant >,   ticker )
 DEFINE_API_ARGS( get_volume,                             vector< variant >,   volume )
 DEFINE_API_ARGS( get_order_book,                         vector< variant >,   order_book )
@@ -960,6 +885,9 @@ DEFINE_API_ARGS( list_proposals,                         vector< variant >,   ve
 DEFINE_API_ARGS( find_proposals,                         vector< variant >,   vector< api_proposal_object > )
 DEFINE_API_ARGS( list_proposal_votes,                    vector< variant >,   vector< database_api::api_proposal_vote_object > )
 DEFINE_API_ARGS( find_recurrent_transfers,               vector< variant >,   vector< database_api::api_recurrent_transfer_object > )
+DEFINE_API_ARGS( find_rc_accounts,                       vector< variant >,   vector< rc::rc_account_api_object > )
+DEFINE_API_ARGS( list_rc_accounts,                       vector< variant >,   vector< rc::rc_account_api_object > )
+DEFINE_API_ARGS( list_rc_direct_delegations,             vector< variant >,   vector< rc::rc_direct_delegation_api_object > )
 
 #undef DEFINE_API_ARGS
 
@@ -1060,6 +988,9 @@ public:
     (find_proposals)
     (list_proposal_votes)
     (find_recurrent_transfers)
+    (find_rc_accounts)
+    (list_rc_accounts)
+    (list_rc_direct_delegations)
   )
 
   private:
@@ -1071,14 +1002,8 @@ public:
 
 } } } // hive::plugins::condenser_api
 
-FC_REFLECT( hive::plugins::condenser_api::discussion_index,
-        (category)(trending)(payout)(payout_comments)(trending30)(updated)(created)(responses)(active)(votes)(maturing)(best)(hot)(promoted)(cashout) )
-
-FC_REFLECT( hive::plugins::condenser_api::api_tag_object,
-        (name)(total_payouts)(net_votes)(top_posts)(comments)(trending) )
-
-FC_REFLECT( hive::plugins::condenser_api::state,
-        (current_route)(props)(tag_idx)(tags)(accounts)(witnesses)(discussion_idx)(witness_schedule)(feed_price)(error) )
+FC_REFLECT( hive::plugins::condenser_api::vote_state,
+        (voter)(weight)(rshares)(percent)(reputation)(time) )
 
 FC_REFLECT( hive::plugins::condenser_api::api_limit_order_object,
         (id)(created)(expiration)(seller)(orderid)(for_sale)(sell_price)(real_price)(rewarded) )
@@ -1088,7 +1013,7 @@ FC_REFLECT( hive::plugins::condenser_api::api_operation_object,
 
 FC_REFLECT( hive::plugins::condenser_api::api_account_object,
           (id)(name)(owner)(active)(posting)(memo_key)(json_metadata)(posting_json_metadata)
-          (proxy)(last_owner_update)(last_account_update)
+          (proxy)(previous_owner_update)(last_owner_update)(last_account_update)
           (created)(mined)
           (recovery_account)(last_account_recovery)(reset_account)
           (comment_count)(lifetime_vote_count)(post_count)(can_vote)(voting_manabar)(downvote_manabar)(voting_power)
@@ -1215,13 +1140,6 @@ FC_REFLECT( hive::plugins::condenser_api::api_proposal_object,
 
 FC_REFLECT( hive::plugins::condenser_api::scheduled_hardfork,
         (hf_version)(live_time) )
-
-FC_REFLECT( hive::plugins::condenser_api::account_vote,
-        (authorperm)(weight)(rshares)(percent)(time) )
-
-FC_REFLECT( hive::plugins::condenser_api::tag_index, (trending) )
-
-FC_REFLECT_ENUM( hive::plugins::condenser_api::withdraw_route_type, (incoming)(outgoing)(all) )
 
 FC_REFLECT( hive::plugins::condenser_api::broadcast_transaction_synchronous_return,
         (id)(block_num)(trx_num)(expired) )

@@ -14,6 +14,7 @@
 
 #include <hive/protocol/protocol.hpp>
 #include <hive/protocol/hardfork.hpp>
+#include <hive/protocol/signed_transaction_transporter.hpp>
 
 #include <appbase/plugin.hpp>
 
@@ -24,7 +25,7 @@
 #include <functional>
 #include <map>
 
-namespace hive { 
+namespace hive {
 
 namespace plugins {namespace chain
 {
@@ -48,7 +49,7 @@ namespace chain {
   struct load_snapshot_supplement_notification;
 
   class database;
-  
+
   struct hardfork_versions
   {
     fc::time_point_sec         times[ HIVE_NUM_HARDFORKS + 1 ];
@@ -57,6 +58,7 @@ namespace chain {
 
   class database_impl;
   class custom_operation_interpreter;
+  class custom_operation_notification;
 
   namespace util {
     struct comment_reward_context;
@@ -74,7 +76,7 @@ namespace chain {
   typedef std::pair<uint32_t, TBenchmarkMidReport> TBenchmark;
 
   struct open_args
-    {
+  {
     fc::path data_dir;
     fc::path shared_mem_dir;
     uint64_t initial_supply = HIVE_INIT_SUPPLY;
@@ -88,13 +90,15 @@ namespace chain {
     fc::variant database_cfg;
     bool replay_in_memory = false;
     std::vector< std::string > replay_memory_indices{};
+    bool enable_block_log_compression = true;
+    int block_log_compression_level = 15;
 
     // The following fields are only used on reindexing
     uint32_t stop_replay_at = 0;
     bool exit_after_replay = false;
     bool force_replay = false;
-    TBenchmark benchmark = TBenchmark(0, [](uint32_t, const chainbase::database::abstract_index_cntr_t&) {});
-    };
+    bool validate_during_replay = false;
+  };
 
   /**
     *   @class database
@@ -106,16 +110,51 @@ namespace chain {
       database();
       ~database();
 
-      bool is_producing()const { return _is_producing; }
-      void set_producing( bool p ) { _is_producing = p;  }
+      enum transaction_status
+      {
+        TX_STATUS_NONE       = 0x00, //outside any transaction processing
+        TX_STATUS_UNVERIFIED = 0x01, //new transaction from API or P2P
+        TX_STATUS_PENDING    = 0x02, //transaction that was verified by the node and is now pending (or popped)
+        TX_STATUS_BLOCK      = 0x08, //during block processing
+        TX_STATUS_INC_BLOCK  = TX_STATUS_BLOCK | TX_STATUS_UNVERIFIED, //while processing new block from API or P2P
+        TX_STATUS_NEW_BLOCK  = TX_STATUS_BLOCK | TX_STATUS_PENDING //while producing new block
+      };
 
-      bool is_pending_tx()const { return _is_pending_tx; }
-      void set_pending_tx( bool p ) { _is_pending_tx = p; }
+      // block coming from API or P2P is validated for the first time, also newly produced or even reapplied but after switching fork
+      bool is_validating_block() const { return _current_tx_status == TX_STATUS_INC_BLOCK; }
+      // this node is a block producer and it creates new block out of pending transactions
+      // (note that new block is not actually a block, that is, there are no pre/post block notifications)
+      bool is_producing_block() const { return _current_tx_status == TX_STATUS_NEW_BLOCK; }
+      // replying previously validated block (irreversible)
+      bool is_replaying_block() const { return _current_tx_status == TX_STATUS_BLOCK; }
+      // processing any block ( == is_validating_block() || is_producing_block() || is_replaying_block() )
+      bool is_processing_block() const { return ( _current_tx_status & TX_STATUS_BLOCK ) != 0; }
 
-      bool is_processing_block()const { return _currently_processing_block_id.valid(); }
+      // transaction coming from API or P2P is validated for the first time, also as part of block to validate
+      bool is_validating_tx() const { return ( _current_tx_status & TX_STATUS_UNVERIFIED ) != 0; }
+      // transaction coming from API or P2P not as part of block is validated for the first time
+      bool is_validating_one_tx() const { return _current_tx_status == TX_STATUS_UNVERIFIED; }
+      // pending (or popped) transaction is now reapplied (also as part of new block)
+      bool is_reapplying_tx() const { return ( _current_tx_status & TX_STATUS_PENDING ) != 0; }
+      // pending (or popped) transaction is now reapplied not as part of block
+      bool is_reapplying_one_tx() const { return _current_tx_status == TX_STATUS_PENDING; }
 
-      bool _is_producing = false;
-      bool _is_pending_tx = false;
+      // node has decisive power over what is acceptable (to propagate via P2P or include in new block)
+      bool is_in_control() const { return is_validating_one_tx() || is_producing_block(); }
+
+      transaction_status get_tx_status() const { return _current_tx_status; }
+
+      void set_tx_status( transaction_status s )
+      {
+        if( _current_tx_status != TX_STATUS_NONE )
+        {
+          wlog( "Nested tx processing: _current_tx_status==${cs}, incoming ${s}",
+            ( "cs", ( int )_current_tx_status )( "s", ( int )s ) );
+          // make sure to unconditionally call clear_tx_status() when processing ends or is broken
+        }
+        _current_tx_status = s;
+      }
+      void clear_tx_status() { _current_tx_status = TX_STATUS_NONE; }
 
       bool _log_hardforks = true;
 
@@ -153,7 +192,17 @@ namespace chain {
       uint32_t reindex_internal( const open_args& args, signed_block& block );
       void remove_expired_governance_votes();
 
+      /// Allows to load all data being independent to the persistent storage held in shared memory file.
+      void initialize_state_independent_data(const open_args& args);
+
+      bool is_included_block_unlocked(const block_id_type& block_id);
     public:
+      std::vector<block_id_type> get_blockchain_synopsis(const block_id_type& reference_point, uint32_t number_of_blocks_after_reference_point);
+      std::deque<block_id_type>::const_iterator find_first_item_not_in_blockchain(const std::deque<block_id_type>& item_hashes_received);
+      std::vector<block_id_type> get_block_ids(const std::vector<block_id_type>& blockchain_synopsis, uint32_t& remaining_item_count, uint32_t limit);
+
+      /// Allows to load all required initial data from persistent storage held in shared memory file. Must be used directly after opening a database, but also after loading a snapshot.
+      void load_state_initial_data(const open_args& args);
 
       /**
         * @brief Check if replaying was finished and all blocks from `block_log` were processed.
@@ -162,7 +211,7 @@ namespace chain {
         * If returns `false`, then opening a node should be forbidden.
         *
         * There are output-type arguments: `head_block_num_origin`, `head_block_num_state` for information purposes only.
-        * 
+        *
         * @return information if replaying was finished
         */
       bool is_reindex_complete( uint64_t* head_block_num_origin, uint64_t* head_block_num_state ) const;
@@ -193,20 +242,25 @@ namespace chain {
         *  part of the official chain, otherwise return false
         */
       bool                       is_known_block( const block_id_type& id )const;
+    private:
+      bool                       is_known_block_unlocked(const block_id_type& id)const;
+    public:
       bool                       is_known_transaction( const transaction_id_type& id )const;
       fc::sha256                 get_pow_target()const;
       uint32_t                   get_pow_summary_target()const;
       block_id_type              find_block_id_for_num( uint32_t block_num )const;
+    public:
       block_id_type              get_block_id_for_num( uint32_t block_num )const;
       optional<signed_block>     fetch_block_by_id( const block_id_type& id )const;
-      optional<signed_block>     fetch_block_by_number( uint32_t num )const;
-      optional<signed_block>     fetch_block_by_number_unlocked( uint32_t block_num );
-      std::vector<signed_block>  fetch_block_range_unlocked( const uint32_t starting_block_num, const uint32_t count );
+      optional<signed_block_header> fetch_block_header_by_id( const block_id_type& id )const;
+      optional<signed_block_header> fetch_block_header_by_number( uint32_t num, fc::microseconds wait_for_microseconds = fc::microseconds() )const;
+      optional<signed_block>     fetch_block_by_number( uint32_t num, fc::microseconds wait_for_microseconds = fc::microseconds() )const;
+      std::vector<signed_block>  fetch_block_range( const uint32_t starting_block_num, const uint32_t count, fc::microseconds wait_for_microseconds = fc::microseconds() );
       const signed_transaction   get_recent_transaction( const transaction_id_type& trx_id )const;
       std::vector<block_id_type> get_block_ids_on_fork(block_id_type head_of_fork) const;
 
       /// Warning: to correctly process old blocks initially old chain-id should be set.
-      chain_id_type hive_chain_id = STEEM_CHAIN_ID;
+      chain_id_type hive_chain_id = OLD_CHAIN_ID;
       /// Returns current chain-id being in use depending on applied HF
       chain_id_type get_chain_id() const;
       /// Returns pre-HF24 chain id (if mainnet is used).
@@ -238,10 +292,10 @@ namespace chain {
       const account_object&  get_treasury()const { return get_account( get_treasury_name() ); }
       /// Returns true for any account name that was ever a treasury account
       bool                   is_treasury( const account_name_type& name )const;
-      
+
       const account_object&  get_account(  const account_id_type      id )const;
       const account_object*  find_account( const account_id_type&     id )const;
-      
+
       const account_object&  get_account(  const account_name_type& name )const;
       const account_object*  find_account( const account_name_type& name )const;
 
@@ -283,13 +337,15 @@ namespace chain {
     public:
 
       const time_point_sec                   calculate_discussion_payout_time( const comment_object& comment )const;
-      const time_point_sec                   calculate_discussion_payout_time( const comment_cashout_object& comment_cashout )const;
+      const time_point_sec                   calculate_discussion_payout_time( const comment_object& comment, const comment_cashout_object& comment_cashout )const;
       const reward_fund_object&              get_reward_fund()const;
 
       const comment_cashout_object* find_comment_cashout( const comment_object& comment ) const;
       const comment_cashout_object* find_comment_cashout( comment_id_type comment_id ) const;
+      const comment_cashout_ex_object* find_comment_cashout_ex( const comment_object& comment ) const;
+      const comment_cashout_ex_object* find_comment_cashout_ex( comment_id_type comment_id ) const;
       const comment_object& get_comment( const comment_cashout_object& comment_cashout ) const;
-      void remove_old_comments();
+      void remove_old_cashouts();
 
       asset get_effective_vesting_shares( const account_object& account, asset_symbol_type vested_symbol )const;
 
@@ -306,17 +362,17 @@ namespace chain {
       bool                                   before_last_checkpoint()const;
 
       bool push_block( const signed_block& b, uint32_t skip = skip_nothing );
-      void push_transaction( const signed_transaction& trx, uint32_t skip = skip_nothing );
+      void push_transaction( const signed_transaction_transporter& trx, uint32_t skip = skip_nothing );
       void _maybe_warn_multiple_production( uint32_t height )const;
       bool _push_block( const signed_block& b );
-      void _push_transaction( const signed_transaction& trx );
+      void _push_transaction( const signed_transaction_transporter& trx );
 
       void pop_block();
       void clear_pending();
 
       void push_virtual_operation( const operation& op );
       void pre_push_virtual_operation( const operation& op );
-      void post_push_virtual_operation( const operation& op );
+      void post_push_virtual_operation( const operation& op, const fc::optional<uint64_t>& op_in_trx = fc::optional<uint64_t>() );
 
       /*
         * Pushing an action without specifying an execution time will execute at head block.
@@ -345,29 +401,37 @@ namespace chain {
       void notify_post_apply_block( const block_notification& note );
       void notify_fail_apply_block( const block_notification& note );
       void notify_irreversible_block( uint32_t block_num );
+      void notify_switch_fork( uint32_t block_num );
       void notify_pre_apply_transaction( const transaction_notification& note );
       void notify_post_apply_transaction( const transaction_notification& note );
+      void notify_pre_apply_custom_operation( const custom_operation_notification& note );
+      void notify_post_apply_custom_operation( const custom_operation_notification& note );
+
 
       using apply_required_action_handler_t = std::function< void(const required_action_notification&) >;
       using apply_optional_action_handler_t = std::function< void(const optional_action_notification&) >;
       using apply_operation_handler_t = std::function< void(const operation_notification&) >;
       using apply_transaction_handler_t = std::function< void(const transaction_notification&) >;
       using apply_block_handler_t = std::function< void(const block_notification&) >;
+      using apply_custom_operation_handler_t = std::function< void(const custom_operation_notification&) >;
       using irreversible_block_handler_t = std::function< void(uint32_t) >;
+      using switch_fork_handler_t = std::function< void(uint32_t) >;
       using reindex_handler_t = std::function< void(const reindex_notification&) >;
       using generate_optional_actions_handler_t = std::function< void(const generate_optional_actions_notification&) >;
       using prepare_snapshot_handler_t = std::function < void(const database&, const database::abstract_index_cntr_t&)>;
       using prepare_snapshot_data_supplement_handler_t = std::function < void(const prepare_snapshot_supplement_notification&) >;
       using load_snapshot_data_supplement_handler_t = std::function < void(const load_snapshot_supplement_notification&) >;
       using comment_reward_notification_handler_t = std::function < void(const comment_reward_notification&) >;
+      using end_of_syncing_notification_handler_t = std::function < void(void) >;
 
       void notify_prepare_snapshot_data_supplement(const prepare_snapshot_supplement_notification& n);
       void notify_load_snapshot_data_supplement(const load_snapshot_supplement_notification& n);
       void notify_comment_reward(const comment_reward_notification& note);
+      void notify_end_of_syncing();
 
     private:
-      template <typename TSignal,
-              typename TNotification = std::function<typename TSignal::signature_type>>
+      template < bool IS_PRE_OPERATION, typename TSignal,
+                 typename TNotification = std::function<typename TSignal::signature_type> >
       boost::signals2::connection connect_impl( TSignal& signal, const TNotification& func,
         const abstract_plugin& plugin, int32_t group, const std::string& item_name = "" );
 
@@ -389,9 +453,13 @@ namespace chain {
       boost::signals2::connection add_post_apply_block_handler          ( const apply_block_handler_t&               func, const abstract_plugin& plugin, int32_t group = -1 );
       boost::signals2::connection add_fail_apply_block_handler          ( const apply_block_handler_t&               func, const abstract_plugin& plugin, int32_t group = -1 );
       boost::signals2::connection add_irreversible_block_handler        ( const irreversible_block_handler_t&        func, const abstract_plugin& plugin, int32_t group = -1 );
+      boost::signals2::connection add_switch_fork_handler               ( const switch_fork_handler_t&        func, const abstract_plugin& plugin, int32_t group = -1 );
       boost::signals2::connection add_pre_reindex_handler               ( const reindex_handler_t&                   func, const abstract_plugin& plugin, int32_t group = -1 );
       boost::signals2::connection add_post_reindex_handler              ( const reindex_handler_t&                   func, const abstract_plugin& plugin, int32_t group = -1 );
       boost::signals2::connection add_generate_optional_actions_handler ( const generate_optional_actions_handler_t& func, const abstract_plugin& plugin, int32_t group = -1 );
+      boost::signals2::connection add_pre_apply_custom_operation_handler ( const apply_custom_operation_handler_t&    func, const abstract_plugin& plugin, int32_t group = -1 );
+      boost::signals2::connection add_post_apply_custom_operation_handler( const apply_custom_operation_handler_t&    func, const abstract_plugin& plugin, int32_t group = -1 );
+
 
       boost::signals2::connection add_prepare_snapshot_handler          (const prepare_snapshot_handler_t& func, const abstract_plugin& plugin, int32_t group = -1);
       /// <summary>
@@ -414,6 +482,8 @@ namespace chain {
       boost::signals2::connection add_snapshot_supplement_handler       (const load_snapshot_data_supplement_handler_t& func, const abstract_plugin& plugin, int32_t group = -1);
 
       boost::signals2::connection add_comment_reward_handler            (const comment_reward_notification_handler_t& func, const abstract_plugin& plugin, int32_t group = -1);
+
+      boost::signals2::connection add_end_of_syncing_handler            (const end_of_syncing_notification_handler_t& func, const abstract_plugin& plugin, int32_t group = -1);
 
       //////////////////// db_witness_schedule.cpp ////////////////////
 
@@ -458,8 +528,6 @@ namespace chain {
       asset adjust_account_vesting_balance(const account_object& to_account, const asset& liquid, bool to_reward_balance, Before&& before_vesting_callback );
 
       asset create_vesting( const account_object& to_account, const asset& liquid, bool to_reward_balance=false );
-
-      void adjust_total_payout( const comment_cashout_object& a, const asset& hbd, const asset& curator_hbd_value, const asset& beneficiary_value );
 
       void adjust_liquidity_reward( const account_object& owner, const asset& volume, bool is_hbd );
 
@@ -511,7 +579,9 @@ namespace chain {
       void clear_witness_votes( const account_object& a );
       void process_vesting_withdrawals();
       share_type pay_curators( const comment_object& comment, const comment_cashout_object& comment_cashout, share_type& max_rewards );
-      share_type cashout_comment_helper( util::comment_reward_context& ctx, const comment_object& comment, const comment_cashout_object& comment_cashout, bool forward_curation_remainder = true );
+      share_type cashout_comment_helper( util::comment_reward_context& ctx, const comment_object& comment,
+        const comment_cashout_object& comment_cashout, const comment_cashout_ex_object* comment_cashout_ex,
+        bool forward_curation_remainder = true );
       void process_comment_cashout();
       void process_funds();
       void process_conversions();
@@ -544,6 +614,10 @@ namespace chain {
       time_point_sec   head_block_time()const;
       uint32_t         head_block_num()const;
       block_id_type    head_block_id()const;
+
+      time_point_sec   head_block_time_from_fork_db(fc::microseconds wait_for_microseconds = fc::microseconds())const;
+      uint32_t         head_block_num_from_fork_db(fc::microseconds wait_for_microseconds = fc::microseconds())const;
+      block_id_type    head_block_id_from_fork_db(fc::microseconds wait_for_microseconds = fc::microseconds())const;
 
       node_property_object& node_properties();
 
@@ -578,8 +652,8 @@ namespace chain {
 
       /** when popping a block, the transactions that were removed get cached here so they
         * can be reapplied at the proper time */
-      std::deque< signed_transaction >       _popped_tx;
-      vector< signed_transaction >           _pending_tx;
+      std::deque< signed_transaction_transporter >       _popped_tx;
+      vector< signed_transaction_transporter >           _pending_tx;
 
       bool apply_order( const limit_order_object& new_order_object );
       bool fill_order( const limit_order_object& order, const asset& pays, const asset& receives );
@@ -587,7 +661,6 @@ namespace chain {
       int  match( const limit_order_object& bid, const limit_order_object& ask, const price& trade_price );
 
       void perform_vesting_share_split( uint32_t magnitude );
-      void retally_comment_children();
       void retally_witness_votes();
       void retally_witness_vote_counts( bool force = false );
       void retally_liquidity_weight();
@@ -612,7 +685,7 @@ namespace chain {
       void set_flush_interval( uint32_t flush_blocks );
       void check_free_memory( bool force_print, uint32_t current_block_num );
 
-      void apply_transaction( const signed_transaction& trx, uint32_t skip = skip_nothing );
+      void apply_transaction( const signed_transaction_transporter& trx, uint32_t skip = skip_nothing );
       void apply_required_action( const required_automated_action& a );
       void apply_optional_action( const optional_automated_action& a );
 
@@ -638,11 +711,9 @@ namespace chain {
       //Clears all pending operations on account that involve balance, moves tokens to treasury account
       void gather_balance( const std::string& name, const asset& balance, const asset& hbd_balance );
       void clear_accounts( const std::set< std::string >& cleared_accounts );
-      void clear_account( const account_object& account,
-        asset* transferred_hbd_ptr = nullptr, asset* transferred_hive_ptr = nullptr,
-        asset* converted_vests_ptr = nullptr, asset* hive_from_vests_ptr = nullptr );
+      void clear_account( const account_object& account );
 
-  protected:
+    protected:
       //Mark pop_undo() as protected -- we do not want outside calling pop_undo(); it should call pop_block() instead
       //void pop_undo() { object_database::pop_undo(); }
       void notify_changed_objects();
@@ -652,7 +723,7 @@ namespace chain {
 
       void apply_block( const signed_block& next_block, uint32_t skip = skip_nothing );
       void _apply_block( const signed_block& next_block );
-      void _apply_transaction( const signed_transaction& trx );
+      void _apply_transaction( const signed_transaction_transporter& trx );
       void apply_operation( const operation& op );
 
       void process_required_actions( const required_automated_actions& actions );
@@ -689,6 +760,7 @@ namespace chain {
       void clear_expired_orders();
       void clear_expired_delegations();
       void process_header_extensions( const signed_block& next_block, required_automated_actions& req_actions, optional_automated_actions& opt_actions );
+      void process_genesis_accounts();
 
       void generate_required_actions();
       void generate_optional_actions();
@@ -712,6 +784,7 @@ namespace chain {
         note.block        = _current_block_num;
         note.trx_in_block = _current_trx_in_block;
         note.op_in_trx    = _current_op_in_trx;
+        note.virtual_op   = hive::protocol::is_virtual_operation(op);
         return note;
       }
 
@@ -772,11 +845,13 @@ namespace chain {
       template< typename MultiIndexType >
       friend void add_plugin_index( database& db );
 
+      transaction_status            _current_tx_status = TX_STATUS_NONE;
       transaction_id_type           _current_trx_id;
       uint32_t                      _current_block_num    = 0;
       int32_t                       _current_trx_in_block = 0;
-      uint16_t                      _current_op_in_trx    = 0;
-      uint16_t                      _current_virtual_op   = 0;
+      uint32_t                      _current_op_in_trx    = 0;
+
+      const struct operation_notification* _current_applied_operation_info = nullptr;
 
       optional< block_id_type >     _currently_processing_block_id;
 
@@ -811,7 +886,10 @@ namespace chain {
         */
       fc::signal<void(const operation_notification&)>       _post_apply_operation_signal;
 
-      /**
+      fc::signal<void(const custom_operation_notification&)> _pre_apply_custom_operation_signal;
+      fc::signal<void(const custom_operation_notification&)> _post_apply_custom_operation_signal;
+
+    /**
         *  This signal is emitted when we start processing a block.
         *
         *  You may not yield from this callback because the blockchain is holding
@@ -821,6 +899,8 @@ namespace chain {
       fc::signal<void(const block_notification&)>           _pre_apply_block_signal;
 
       fc::signal<void(uint32_t)>                            _on_irreversible_block;
+
+      fc::signal<void(uint32_t)>                            _switch_fork_signal;
 
       /**
         *  This signal is emitted after all operations and virtual operation for a
@@ -892,6 +972,8 @@ namespace chain {
       ///  Emitted when rewards for author and curators are paid out.
       /// </summary>
       fc::signal<void(const comment_reward_notification&)>          _comment_reward_signal;
+
+      fc::signal<void()> _end_of_syncing_signal;
   };
 
   struct reindex_notification
@@ -899,9 +981,11 @@ namespace chain {
     reindex_notification( const open_args& a ) : args( a ) {}
 
     bool force_replay = false;
+    bool validate_during_replay = false;
     bool reindex_success = false;
     uint32_t last_block_number = 0;
     const open_args& args;
+    uint32_t max_block_number = 0;
   };
 
   struct prepare_snapshot_supplement_notification

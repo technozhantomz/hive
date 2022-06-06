@@ -6,7 +6,9 @@
 
 #include <hive/chain/witness_objects.hpp>
 
-#include <hive/plugins/condenser_api/condenser_api_legacy_asset.hpp>
+#include <hive/protocol/asset.hpp>
+
+#include <fc/exception/exception.hpp>
 
 namespace hive { namespace plugins { namespace condenser_api {
 
@@ -35,9 +37,6 @@ namespace hive { namespace plugins { namespace condenser_api {
       > legacy_comment_options_extensions;
 
   typedef vector< legacy_comment_options_extensions > legacy_comment_options_extensions_type;
-
-  typedef static_variant<void_t, protocol::update_proposal_end_date> legacy_update_proposal_extensions;
-  typedef vector< legacy_update_proposal_extensions > legacy_update_proposal_extensions_type;
 
   typedef static_variant<
         protocol::pow2,
@@ -174,7 +173,9 @@ namespace hive { namespace plugins { namespace condenser_api {
       creator( op.creator ),
       initial_vesting_shares(legacy_asset::from_asset( op.initial_vesting_shares )),
       initial_delegation(legacy_asset::from_asset( op.initial_delegation ))
-    {}
+    {
+      FC_ASSERT(creator.size(), "Every account should have a creator");
+    }
 
     operator account_created_operation()const
     {
@@ -515,12 +516,7 @@ namespace hive { namespace plugins { namespace condenser_api {
       subject( op.subject ),
       permlink( op.permlink)
     {
-      for( const auto& e : op.extensions )
-      {
-        legacy_update_proposal_extensions ext;
-        e.visit( convert_to_legacy_static_variant< legacy_update_proposal_extensions >( ext ) );
-        extensions.push_back( e );
-      }
+      extensions.insert( op.extensions.begin(), op.extensions.end() );
     }
 
     operator update_proposal_operation()const
@@ -540,8 +536,7 @@ namespace hive { namespace plugins { namespace condenser_api {
     legacy_asset daily_pay;
     string subject;
     string permlink;
-    time_point_sec end_date;
-    legacy_update_proposal_extensions_type extensions;
+    hive::protocol::update_proposal_extensions_type extensions;
   };
 
   struct legacy_withdraw_vesting_operation
@@ -1292,7 +1287,7 @@ namespace hive { namespace plugins { namespace condenser_api {
   {
     legacy_hardfork_hive_operation() {}
     legacy_hardfork_hive_operation( const hardfork_hive_operation& op ) :
-      account( op.account ), treasury( op.treasury ),
+      account( op.account ), treasury( op.treasury ), other_affected_accounts( op.other_affected_accounts ),
       hbd_transferred( legacy_asset::from_asset( op.hbd_transferred ) ),
       hive_transferred( legacy_asset::from_asset( op.hive_transferred ) ),
       vests_converted( legacy_asset::from_asset( op.vests_converted ) ),
@@ -1301,9 +1296,10 @@ namespace hive { namespace plugins { namespace condenser_api {
 
     operator hardfork_hive_operation()const
     {
-      legacy_hardfork_hive_operation op;
+      hardfork_hive_operation op;
       op.account = account;
       op.treasury = treasury;
+      op.other_affected_accounts = other_affected_accounts;
       op.hbd_transferred = hbd_transferred;
       op.hive_transferred = hive_transferred;
       op.vests_converted = vests_converted;
@@ -1313,6 +1309,8 @@ namespace hive { namespace plugins { namespace condenser_api {
 
     account_name_type account;
     account_name_type treasury;
+    std::vector< account_name_type >
+                      other_affected_accounts;
     legacy_asset      hbd_transferred;
     legacy_asset      hive_transferred;
     legacy_asset      vests_converted;
@@ -1330,7 +1328,7 @@ namespace hive { namespace plugins { namespace condenser_api {
 
     operator hardfork_hive_restore_operation()const
     {
-      legacy_hardfork_hive_restore_operation op;
+      hardfork_hive_restore_operation op;
       op.account = account;
       op.treasury = treasury;
       op.hbd_transferred = hbd_transferred;
@@ -2063,15 +2061,6 @@ namespace fc {
 void to_variant( const hive::plugins::condenser_api::legacy_operation&, fc::variant& );
 void from_variant( const fc::variant&, hive::plugins::condenser_api::legacy_operation& );
 
-void to_variant( const hive::plugins::condenser_api::legacy_comment_options_extensions&, fc::variant& );
-void from_variant( const fc::variant&, hive::plugins::condenser_api::legacy_comment_options_extensions& );
-
-void to_variant( const hive::plugins::condenser_api::legacy_pow2_work&, fc::variant& );
-void from_variant( const fc::variant&, hive::plugins::condenser_api::legacy_pow2_work& );
-
-void to_variant( const hive::plugins::condenser_api::legacy_update_proposal_extensions&, fc::variant& );
-void from_variant( const fc::variant&, hive::plugins::condenser_api::legacy_update_proposal_extensions& );
-
 struct from_old_static_variant
 {
   variant& var;
@@ -2261,7 +2250,7 @@ FC_REFLECT( hive::plugins::condenser_api::legacy_proposal_pay_operation, (propos
 FC_REFLECT( hive::plugins::condenser_api::legacy_sps_fund_operation, (fund_account)(additional_funds) )
 FC_REFLECT( hive::plugins::condenser_api::legacy_create_proposal_operation, (creator)(receiver)(start_date)(end_date)(daily_pay)(subject)(permlink) )
 FC_REFLECT( hive::plugins::condenser_api::legacy_update_proposal_operation, (proposal_id)(creator)(daily_pay)(subject)(permlink)(extensions) )
-FC_REFLECT( hive::plugins::condenser_api::legacy_hardfork_hive_operation, (account)(treasury)(hbd_transferred)(hive_transferred)(vests_converted)(total_hive_from_vests) )
+FC_REFLECT( hive::plugins::condenser_api::legacy_hardfork_hive_operation, (account)(treasury)(other_affected_accounts)(hbd_transferred)(hive_transferred)(vests_converted)(total_hive_from_vests) )
 FC_REFLECT( hive::plugins::condenser_api::legacy_hardfork_hive_restore_operation, (account)(treasury)(hbd_transferred)(hive_transferred) )
 FC_REFLECT( hive::plugins::condenser_api::legacy_effective_comment_vote_operation, (voter)(author)(permlink)(weight)(rshares)(total_vote_weight)(pending_payout) )
 FC_REFLECT( hive::plugins::condenser_api::legacy_recurrent_transfer_operation, (from)(to)(amount)(memo)(recurrence)(executions) )

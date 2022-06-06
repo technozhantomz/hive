@@ -26,46 +26,43 @@ BOOST_AUTO_TEST_CASE( transaction_status_test )
 
   try
   {
-    int argc = boost::unit_test::framework::master_test_suite().argc;
-    char** argv = boost::unit_test::framework::master_test_suite().argv;
+    hive::plugins::transaction_status_api::transaction_status_api_plugin* tx_status_api = nullptr;
+    hive::plugins::transaction_status::transaction_status_plugin* tx_status = nullptr;
 
-    for ( int i = 1; i < argc; i++ )
+    auto _data_dir = common_init( [&]( appbase::application& app, int argc, char** argv )
     {
-      const std::string arg = argv[ i ];
-      if ( arg == "--record-assert-trip" )
-        fc::enable_record_assert_trip = true;
-      if ( arg == "--show-test-names" )
-        std::cout << "running test " << boost::unit_test::framework::current_test_case().p_name << std::endl;
-    }
+      app.register_plugin< transaction_status_plugin >();
+      app.register_plugin< hive::plugins::transaction_status_api::transaction_status_api_plugin >();
+      db_plugin = &app.register_plugin< hive::plugins::debug_node::debug_node_plugin >();
 
-    appbase::app().register_plugin< transaction_status_plugin >();
-    appbase::app().register_plugin< hive::plugins::transaction_status_api::transaction_status_api_plugin >();
-    db_plugin = &appbase::app().register_plugin< hive::plugins::debug_node::debug_node_plugin >();
+      // We create an argc/argv so that the transaction_status plugin can be initialized with a reasonable block depth
+      int test_argc = 5;
+      const char* test_argv[] = {
+        boost::unit_test::framework::master_test_suite().argv[ 0 ],
+        "--transaction-status-block-depth",
+        TRANSACTION_STATUS_TEST_BLOCK_DEPTH_STR,
+        "--transaction-status-track-after-block",
+        TRANSCATION_STATUS_TRACK_AFTER_BLOCK_STR
+      };
+
+      db_plugin->logging = false;
+      app.initialize<
+        hive::plugins::transaction_status_api::transaction_status_api_plugin,
+        hive::plugins::debug_node::debug_node_plugin >( test_argc, ( char** ) test_argv );
+
+      db = &app.get_plugin< hive::plugins::chain::chain_plugin >().db();
+      BOOST_REQUIRE( db );
+
+      tx_status_api = &app.get_plugin< hive::plugins::transaction_status_api::transaction_status_api_plugin >();
+      BOOST_REQUIRE( tx_status_api );
+
+      tx_status = &app.get_plugin< hive::plugins::transaction_status::transaction_status_plugin >();
+      BOOST_REQUIRE( tx_status );
+    } );
+
     init_account_pub_key = init_account_priv_key.get_public_key();
 
-    // We create an argc/argv so that the transaction_status plugin can be initialized with a reasonable block depth
-    int test_argc = 5;
-    const char* test_argv[] = { boost::unit_test::framework::master_test_suite().argv[0],
-                        "--transaction-status-block-depth",
-                        TRANSACTION_STATUS_TEST_BLOCK_DEPTH_STR,
-                        "--transaction-status-track-after-block",
-                        TRANSCATION_STATUS_TRACK_AFTER_BLOCK_STR };
-
-    db_plugin->logging = false;
-    appbase::app().initialize<
-      hive::plugins::transaction_status_api::transaction_status_api_plugin,
-      hive::plugins::debug_node::debug_node_plugin >( test_argc, (char**)test_argv );
-
-    db = &appbase::app().get_plugin< hive::plugins::chain::chain_plugin >().db();
-    BOOST_REQUIRE( db );
-
-    auto tx_status_api = &appbase::app().get_plugin< hive::plugins::transaction_status_api::transaction_status_api_plugin >();
-    BOOST_REQUIRE( tx_status_api );
-
-    auto tx_status = &appbase::app().get_plugin< hive::plugins::transaction_status::transaction_status_plugin >();
-    BOOST_REQUIRE( tx_status );
-
-    open_database();
+    open_database( _data_dir );
 
     BOOST_REQUIRE( db->get_index< transaction_status_index >().indices().get< by_id >().empty() );
     BOOST_REQUIRE( db->get_index< transaction_status_index >().indices().get< by_trx_id >().empty() );
@@ -114,7 +111,7 @@ BOOST_AUTO_TEST_CASE( transaction_status_test )
     tx0.operations.push_back( op0 );
     tx0.set_expiration( tx0_expiration );
     sign( tx0, alice_private_key );
-    db->push_transaction( tx0, 0 );
+    push_transaction( tx0, 0 );
 
     // Tracking should not be enabled until we have reached TRANSCATION_STATUS_TRACK_AFTER_BLOCK - ( HIVE_MAX_TIME_UNTIL_EXPIRATION / HIVE_BLOCK_INTERVAL ) blocks
     BOOST_REQUIRE( db->get_index< transaction_status_index >().indices().get< by_id >().empty() );
@@ -147,7 +144,7 @@ BOOST_AUTO_TEST_CASE( transaction_status_test )
     tx1.operations.push_back( op1 );
     tx1.set_expiration( tx1_expiration );
     sign( tx1, alice_private_key );
-    db->push_transaction( tx1, 0 );
+    push_transaction( tx1, 0 );
 
     // Transaction 1 exists in the mem pool
     tso = db->find< transaction_status_object, by_trx_id >( tx1.id() );
@@ -180,7 +177,7 @@ BOOST_AUTO_TEST_CASE( transaction_status_test )
     tx2.operations.push_back( op2 );
     tx2.set_expiration( tx2_expiration );
     sign( tx2, alice_private_key );
-    db->push_transaction( tx2, 0 );
+    push_transaction( tx2, 0 );
 
     // Create transaction 3
     signed_transaction tx3;
@@ -194,7 +191,7 @@ BOOST_AUTO_TEST_CASE( transaction_status_test )
     tx3.operations.push_back( op3 );
     tx3.set_expiration( tx3_expiration );
     sign( tx3, bob_private_key );
-    db->push_transaction( tx3, 0 );
+    push_transaction( tx3, 0 );
 
     // Transaction 1 exists in a block
     tso = db->find< transaction_status_object, by_trx_id >( tx1.id() );
@@ -425,7 +422,7 @@ BOOST_AUTO_TEST_CASE( transaction_status_test )
     tx4.operations.push_back( op4 );
     tx4.set_expiration( tx4_expiration );
     sign( tx4, alice_private_key );
-    db->push_transaction( tx4, 0 );
+    push_transaction( tx4, 0 );
 
     generate_block();
 
@@ -453,7 +450,7 @@ BOOST_AUTO_TEST_CASE( transaction_status_test )
     tx5.operations.push_back( op5 );
     tx5.set_expiration( tx5_expiration );
     sign( tx5, alice_private_key );
-    db->push_transaction( tx5, 0 );
+    push_transaction( tx5, 0 );
 
     generate_blocks( TRANSACTION_STATUS_TEST_BLOCK_DEPTH + ( HIVE_MAX_TIME_UNTIL_EXPIRATION / HIVE_BLOCK_INTERVAL ) - 1 );
 

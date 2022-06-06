@@ -1,10 +1,14 @@
 #include <hive/chain/database_exceptions.hpp>
 
+#include <hive/protocol/signed_transaction_transporter.hpp>
+
 #include <hive/plugins/chain/abstract_block_producer.hpp>
 #include <hive/plugins/chain/state_snapshot_provider.hpp>
 #include <hive/plugins/chain/chain_plugin.hpp>
 #include <hive/plugins/statsd/utility.hpp>
 
+#include <hive/utilities/key_conversion.hpp>
+#include <hive/utilities/notifications.hpp>
 #include <hive/utilities/benchmark_dumper.hpp>
 #include <hive/utilities/database_configuration.hpp>
 
@@ -14,14 +18,18 @@
 
 #include <boost/asio.hpp>
 #include <boost/optional.hpp>
-#include <boost/bind.hpp>
+//#include <boost/bind/bind.hpp>
 #include <boost/preprocessor/stringize.hpp>
-
-#include <boost/lockfree/queue.hpp>
+#include <boost/scope_exit.hpp>
+#include <boost/thread/future.hpp>
 
 #include <thread>
+#include <chrono>
 #include <memory>
 #include <iostream>
+#include <mutex>
+#include <condition_variable>
+#include <queue>
 
 namespace hive { namespace plugins { namespace chain {
 
@@ -35,6 +43,7 @@ using hive::chain::block_id_type;
 using hive::plugins::chain::synchronization_type;
 using index_memory_details_cntr_t = hive::utilities::benchmark_dumper::index_memory_details_cntr_t;
 using get_indexes_memory_details_type = std::function< void( index_memory_details_cntr_t&, bool ) >;
+using hive::protocol::signed_transaction_transporter;
 
 #define NUM_THREADS 1
 
@@ -54,7 +63,7 @@ struct generate_block_request
 };
 
 typedef fc::static_variant< const signed_block*, const signed_transaction*, generate_block_request* > write_request_ptr;
-typedef fc::static_variant< boost::promise< void >*, fc::future< void >* > promise_ptr;
+typedef fc::static_variant<std::shared_ptr<boost::promise<void>>, fc::promise<void>::ptr> promise_ptr;
 
 struct write_context
 {
@@ -70,13 +79,17 @@ namespace detail {
 class chain_plugin_impl
 {
   public:
-    chain_plugin_impl() : write_queue( 64 ) {}
-    ~chain_plugin_impl() { stop_write_processing(); }
+    chain_plugin_impl() {}
+    ~chain_plugin_impl() 
+    {
+      stop_write_processing();
+      if(dumper_post_apply_block.connected()) dumper_post_apply_block.disconnect();
+    }
 
     void register_snapshot_provider(state_snapshot_provider& provider)
-      {
+    {
       snapshot_provider = &provider;
-      }
+    }
 
     void start_write_processing();
     void stop_write_processing();
@@ -92,6 +105,7 @@ class chain_plugin_impl
     void work( synchronization_type& on_sync );
 
     void write_default_database_config( bfs::path& p );
+    void setup_benchmark_dumper();
 
     uint64_t                         shared_memory_size = 0;
     uint16_t                         shared_file_full_threshold = 0;
@@ -108,18 +122,27 @@ class chain_plugin_impl
     bool                             statsd_on_replay = false;
     uint32_t                         stop_replay_at = 0;
     bool                             exit_after_replay = false;
+    bool                             exit_before_sync = false;
     bool                             force_replay = false;
+    bool                             validate_during_replay = false;
     uint32_t                         benchmark_interval = 0;
     uint32_t                         flush_interval = 0;
     bool                             replay_in_memory = false;
     std::vector< std::string >       replay_memory_indices{};
+    bool                             enable_block_log_compression = true;
+    int                              block_log_compression_level = 15;
     flat_map<uint32_t,block_id_type> loaded_checkpoints;
 
     uint32_t allow_future_time = 5;
 
-    bool                             running = true;
     std::shared_ptr< std::thread >   write_processor_thread;
-    boost::lockfree::queue< write_context* > write_queue;
+
+    // `writequeue` and `running` are guarded by the queue_mutex
+    std::mutex                       queue_mutex;
+    std::condition_variable          queue_condition_variable;
+    std::queue<write_context*>       write_queue;
+    bool                             running = true;
+
     int16_t                          write_lock_hold_time = HIVE_BLOCK_INTERVAL * 1000 / 6; // 1/6 of block time (millseconds)
 
     vector< string >                 loaded_plugins;
@@ -133,10 +156,17 @@ class chain_plugin_impl
     hive::utilities::benchmark_dumper   dumper;
     hive::chain::open_args              db_open_args;
     get_indexes_memory_details_type     get_indexes_memory_details;
+    boost::signals2::connection         dumper_post_apply_block;
 
     state_snapshot_provider*            snapshot_provider = nullptr;
     bool                                is_p2p_enabled = true;
-    std::atomic<uint32_t>               peer_count;
+    std::atomic<uint32_t>               peer_count = {0};
+
+    fc::time_point cumulative_times_last_reported_time;
+    fc::microseconds cumulative_time_waiting_for_locks;
+    fc::microseconds cumulative_time_processing_blocks;
+    fc::microseconds cumulative_time_processing_transactions;
+    fc::microseconds cumulative_time_waiting_for_work;
 };
 
 struct write_request_visitor
@@ -148,6 +178,11 @@ struct write_request_visitor
   fc::optional< fc::exception >* except;
   std::shared_ptr< abstract_block_producer > block_generator;
 
+  uint32_t pushed_transaction_counter = 0;
+
+  fc::microseconds* cumulative_time_processing_blocks;
+  fc::microseconds* cumulative_time_processing_transactions;
+
   typedef bool result_type;
 
   bool operator()( const signed_block* block )
@@ -157,17 +192,19 @@ struct write_request_visitor
     try
     {
       STATSD_START_TIMER( "chain", "write_time", "push_block", 1.0f )
+      fc::time_point time_before_pushing_block = fc::time_point::now();
       result = db->push_block( *block, skip );
+      *cumulative_time_processing_blocks += fc::time_point::now() - time_before_pushing_block;
       STATSD_STOP_TIMER( "chain", "write_time", "push_block" )
     }
-    catch( fc::exception& e )
+    catch( const fc::exception& e )
     {
       *except = e;
     }
     catch( ... )
     {
-      *except = fc::unhandled_exception( FC_LOG_MESSAGE( warn, "Unexpected exception while pushing block." ),
-                              std::current_exception() );
+      *except = fc::unhandled_exception(FC_LOG_MESSAGE( warn, "Unexpected exception while pushing block." ),
+                                        std::current_exception());
     }
 
     return result;
@@ -177,22 +214,56 @@ struct write_request_visitor
   {
     bool result = false;
 
-    try
+    auto _push_transaction = [this](const signed_transaction* trx, hive::protocol::pack_type pack )
     {
       STATSD_START_TIMER( "chain", "write_time", "push_transaction", 1.0f )
-      db->push_transaction( *trx );
+      fc::time_point time_before_pushing_transaction = fc::time_point::now();
+      db->push_transaction( signed_transaction_transporter( *trx, pack ) );
+      *cumulative_time_processing_transactions += fc::time_point::now() - time_before_pushing_transaction;
       STATSD_STOP_TIMER( "chain", "write_time", "push_transaction" )
+    };
+
+    try
+    {
+      try
+      {
+        _push_transaction( trx, serialization_mode_controller::get_current_pack() );
+      }
+      catch( const protocol::transaction_auth_exception& e )
+      {
+        try
+        {
+          if( db->has_hardfork( HIVE_HARDFORK_1_26 ) )
+          {
+            _push_transaction( trx, serialization_mode_controller::get_another_pack() );
+          }
+          else
+            throw;
+        }
+        catch( const fc::exception& e )
+        {
+          *except = e;
+        }
+        catch( ... )
+        {
+          elog("Unknown exception while pushing transaction.");
+          *except = fc::unhandled_exception(FC_LOG_MESSAGE( warn, "Unexpected exception while pushing transaction." ),
+                                            std::current_exception());
+        }
+      }
 
       result = true;
+
     }
-    catch( fc::exception& e )
+    catch( const fc::exception& e )
     {
       *except = e;
     }
     catch( ... )
     {
-      *except = fc::unhandled_exception( FC_LOG_MESSAGE( warn, "Unexpected exception while pushing block." ),
-                              std::current_exception() );
+      elog("Unknown exception while pushing transaction.");
+      *except = fc::unhandled_exception(FC_LOG_MESSAGE( warn, "Unexpected exception while pushing transaction." ),
+                                        std::current_exception());
     }
 
     return result;
@@ -218,7 +289,7 @@ struct write_request_visitor
 
       result = true;
     }
-    catch( fc::exception& e )
+    catch( const fc::exception& e )
     {
       *except = e;
     }
@@ -238,8 +309,17 @@ struct request_promise_visitor
 
   typedef void result_type;
 
-  template< typename T >
-  void operator()( T* t )
+  // n.b. our visitor functions take a shared pointer to the promise by value
+  // so the promise can't be garbage collected until the set_value() function
+  // has finished exiting.  There's a race where the calling thread wakes up
+  // during the set_value() call and can delete the promise out from under us
+  // unless we hold a reference here.
+  void operator()( fc::promise<void>::ptr t )
+  {
+    t->set_value();
+  }
+  
+  void operator()( std::shared_ptr<boost::promise<void>> t )
   {
     t->set_value();
   }
@@ -247,119 +327,201 @@ struct request_promise_visitor
 
 void chain_plugin_impl::start_write_processing()
 {
-  write_processor_thread = std::make_shared< std::thread >( [&]()
+  write_processor_thread = std::make_shared<std::thread>([&]()
   {
-    ilog("Write processing thread started.");
-
-    const fc::microseconds block_wait_max_time = fc::seconds(10*HIVE_BLOCK_INTERVAL);
-    bool is_syncing = true;
-    write_context* cxt;
-    write_request_visitor req_visitor;
-    req_visitor.db = &db;
-    req_visitor.block_generator = block_generator;
-
-    request_promise_visitor prom_visitor;
-
-    /* This loop monitors the write request queue and performs writes to the database. These
-      * can be blocks or pending transactions. Because the caller needs to know the success of
-      * the write and any exceptions that are thrown, a write context is passed in the queue
-      * to the processing thread which it will use to store the results of the write. It is the
-      * caller's responsibility to ensure the pointer to the write context remains valid until
-      * the contained promise is complete.
-      *
-      * The loop has two modes, sync mode and live mode. In sync mode we want to process writes
-      * as quickly as possible with minimal overhead. The outer loop busy waits on the queue
-      * and the inner loop drains the queue as quickly as possible. We exit sync mode when the
-      * head block is within 1 minute of system time.
-      *
-      * Live mode needs to balance between processing pending writes and allowing readers access
-      * to the database. It will batch writes together as much as possible to minimize lock
-      * overhead but will willingly give up the write lock after 500ms. The thread then sleeps for
-      * 10ms. This allows time for readers to access the database as well as more writes to come
-      * in. When the node is live the rate at which writes come in is slower and busy waiting is
-      * not an optimal use of system resources when we could give CPU time to read threads.
-      */
-    fc::time_point last_popped_block_time = fc::time_point::now();
-    fc::time_point last_msg_time = last_popped_block_time;
-
-    while( running )
+    try
     {
-      if( write_queue.pop( cxt ) )
-      {
-        last_popped_block_time = fc::time_point::now();
+      hive::notify_hived_status("syncing");
+      ilog("Write processing thread started.");
+      fc::set_thread_name("write_queue");
+      fc::thread::current().set_name("write_queue");
+      cumulative_times_last_reported_time = fc::time_point::now();
 
-	      fc::time_point write_lock_request_time = fc::time_point::now();
-        db.with_write_lock( [&]()
+      const fc::microseconds block_wait_max_time = fc::seconds(10 * HIVE_BLOCK_INTERVAL);
+      bool is_syncing = true;
+      write_request_visitor req_visitor;
+      req_visitor.db = &db;
+      req_visitor.block_generator = block_generator;
+      req_visitor.cumulative_time_processing_blocks = &cumulative_time_processing_blocks;
+      req_visitor.cumulative_time_processing_transactions = &cumulative_time_processing_transactions;
+
+      request_promise_visitor prom_visitor;
+
+      /* This loop monitors the write request queue and performs writes to the database. These
+        * can be blocks or pending transactions. Because the caller needs to know the success of
+        * the write and any exceptions that are thrown, a write context is passed in the queue
+        * to the processing thread which it will use to store the results of the write. It is the
+        * caller's responsibility to ensure the pointer to the write context remains valid until
+        * the contained promise is complete.
+        *
+        * The loop has two modes, sync mode and live mode. In sync mode we want to process writes
+        * as quickly as possible with minimal overhead. The outer loop busy waits on the queue
+        * and the inner loop drains the queue as quickly as possible. We exit sync mode when the
+        * head block is within 1 minute of system time.
+        *
+        * Live mode needs to balance between processing pending writes and allowing readers access
+        * to the database. It will batch writes together as much as possible to minimize lock
+        * overhead but will willingly give up the write lock after 500ms. The thread then sleeps for
+        * 10ms. This allows time for readers to access the database as well as more writes to come
+        * in. When the node is live the rate at which writes come in is slower and busy waiting is
+        * not an optimal use of system resources when we could give CPU time to read threads.
+        */
+      fc::time_point last_popped_item_time = fc::time_point::now();
+      fc::time_point last_msg_time = last_popped_item_time;
+      fc::time_point wait_start_time = last_popped_item_time;
+
+      hive::notify_hived_status("syncing");
+      while (true)
+      {
+        // print a message if we haven't gotten any new data in a while
+        fc::time_point loop_start_time = fc::time_point::now();
+        fc::microseconds time_since_last_popped_item = loop_start_time - last_popped_item_time;
+        fc::microseconds time_since_last_message_printed = loop_start_time - last_msg_time;
+        if (time_since_last_popped_item > block_wait_max_time && time_since_last_message_printed > block_wait_max_time)
         {
+          wlog("No P2P data (block/transaction) received in last ${t} seconds... peer_count=${peer_count}", ("t", block_wait_max_time.to_seconds())("peer_count", peer_count.load()));
+          last_msg_time = loop_start_time; /// To avoid log pollution
+        }
+
+        // try to dequeue a block/transaction
+        write_context* cxt;
+        {
+          fc::microseconds max_time_to_wait = time_since_last_popped_item > block_wait_max_time ? block_wait_max_time - time_since_last_message_printed
+                                                                                                : block_wait_max_time - time_since_last_popped_item;
+          std::unique_lock<std::mutex> lock(queue_mutex);
+          bool wait_timed_out = false;
+          while (running && write_queue.empty() && !wait_timed_out)
+            if (queue_condition_variable.wait_for(lock, std::chrono::microseconds(max_time_to_wait.count())) == std::cv_status::timeout)
+              wait_timed_out = true;
+          if (!running) // we woke because the node is shutting down
+            break;
+          if (wait_timed_out) // we timed out, restart the while loop to print a "No P2P data" message
+            continue;
+          // otherwise, we woke because the write_queue is non-empty
+          cxt = write_queue.front();
+          write_queue.pop();
+        }
+
+        cumulative_time_waiting_for_work += fc::time_point::now() - wait_start_time;
+        last_popped_item_time = fc::time_point::now();
+
+        fc::time_point write_lock_request_time = fc::time_point::now();
+        fc::time_point_sec head_block_time;
+        db.with_write_lock([&]()
+        {
+          uint32_t write_queue_items_processed = 0;
           fc::time_point write_lock_acquired_time = fc::time_point::now();
           fc::microseconds write_lock_acquisition_time = write_lock_acquired_time - write_lock_request_time;
+          cumulative_time_waiting_for_locks += write_lock_acquisition_time;
+
           if( write_lock_acquisition_time > fc::milliseconds( 50 ) )
-          {
             wlog("write_lock_acquisition_time = ${write_lock_aquisition_time}μs exceeds warning threshold of 50ms",
                  ("write_lock_aquisition_time", write_lock_acquisition_time.count()));
-          }
-
+          fc_dlog(fc::logger::get("chainlock"), "write_lock_acquisition_time = ${write_lock_aquisition_time}μs",
+                 ("write_lock_aquisition_time", write_lock_acquisition_time.count()));
           STATSD_START_TIMER( "chain", "lock_time", "write_lock", 1.0f )
-          while( true )
+          while (true)
           {
             req_visitor.skip = cxt->skip;
             req_visitor.except = &(cxt->except);
             cxt->success = cxt->req_ptr.visit( req_visitor );
             cxt->prom_ptr.visit( prom_visitor );
 
-            if( is_syncing && fc::time_point::now() - db.head_block_time() < fc::minutes(1) )
-            {
-              is_syncing = false;
-            }
+            ++write_queue_items_processed;
 
-            if( !is_syncing )
+            if (!is_syncing) //if not syncing, we shouldn't take more than 500ms to process everything in the write queue
             {
               fc::microseconds write_lock_held_duration = fc::time_point::now() - write_lock_acquired_time;
-              if (write_lock_held_duration > fc::milliseconds( write_lock_hold_time ) )
+              if (write_lock_held_duration > fc::milliseconds(write_lock_hold_time))
               {
                 wlog("Stopped processing write_queue before empty because we exceeded ${write_lock_hold_time}ms, "
                      "held lock for ${write_lock_held_duration}μs",
-                     ("write_lock_hold_time", write_lock_hold_time)
+                     (write_lock_hold_time)
                      ("write_lock_held_duration", write_lock_held_duration.count()));
                 break;
               }
             }
 
-            if( !write_queue.pop( cxt ) )
             {
-              break;
+              std::unique_lock<std::mutex> lock(queue_mutex);
+              if (!running || write_queue.empty())
+              {
+                fc::microseconds write_queue_processed_duration = fc::time_point::now() - write_lock_acquired_time;
+                //if (write_queue_processed_duration > fc::milliseconds(500))
+                  fc_wlog(fc::logger::get("chainlock"), "Emptied write_queue of ${write_queue_items_processed} items after ${write_queue_processed_duration}µs (${per_block}µs/block)",
+                          (write_queue_items_processed)("write_queue_processed_duration", write_queue_processed_duration.count())
+                          ("per_block", write_queue_processed_duration.count() / write_queue_items_processed));
+                break;
+              }
+              cxt = write_queue.front();
+              write_queue.pop();
             }
 
-            last_popped_block_time = fc::time_point::now();
-          }
-        });
-      }
+            last_popped_item_time = fc::time_point::now();
+          } // while items in write_queue and time limit not exceeded for live sync
+          head_block_time = db.head_block_time();
+        }); // with_write_lock
 
-      if( !is_syncing )
-        boost::this_thread::sleep_for( boost::chrono::milliseconds( 10 ) );
-
-      auto now = fc::time_point::now();
-      if((now - last_popped_block_time) > block_wait_max_time)
-      {
-        if (now - last_msg_time > block_wait_max_time)
+        if (is_syncing && fc::time_point::now() - head_block_time < fc::minutes(1)) //we're syncing, see if we are close enough to move to live sync
         {
-          last_msg_time = now;
-          wlog("No P2P data (block/transaction) received in last ${t} seconds... peer_count=${peer_count}", ("t", block_wait_max_time.to_seconds())("peer_count",peer_count.load()));
-          /// To avoid log pollution
-          wlog("Checking for new P2P data once per ${t} seconds...", ("t", HIVE_BLOCK_INTERVAL));
+          is_syncing = false;
+          db.notify_end_of_syncing();
+          hive::notify_hived_status("entering live mode");
+          wlog("entering live mode");
         }
 
-        boost::this_thread::sleep_for(boost::chrono::seconds(HIVE_BLOCK_INTERVAL));
-      }
-    }
+        wait_start_time = fc::time_point::now();
+        fc::microseconds time_since_last_report = fc::time_point::now() - cumulative_times_last_reported_time;
+        if (time_since_last_report > fc::seconds(30))
+        {
+          fc::microseconds total_recorded_times = cumulative_time_waiting_for_locks + cumulative_time_processing_blocks + cumulative_time_processing_transactions + cumulative_time_waiting_for_work;
+          float percent_waiting_for_locks = cumulative_time_waiting_for_locks.count() / (float)time_since_last_report.count() * 100.f;
+          float percent_processing_blocks = cumulative_time_processing_blocks.count() / (float)time_since_last_report.count() * 100.f;
+          float percent_processing_transactions = cumulative_time_processing_transactions.count() / (float)time_since_last_report.count() * 100.f;
+          float percent_waiting_for_work = cumulative_time_waiting_for_work.count() / (float)time_since_last_report.count() * 100.f;
+          float percent_unknown = (time_since_last_report - total_recorded_times).count() / (float)time_since_last_report.count() * 100.f;
 
-    ilog("Write processing thread finished.");
+          std::ostringstream report;
+          report << std::setprecision(2) << std::fixed 
+                 << "waiting for work: " << percent_waiting_for_work
+                 << "%, waiting for locks: " << percent_waiting_for_locks 
+                 << "%, processing transactions: " << percent_processing_transactions 
+                 << "%, processing blocks: " << percent_processing_blocks 
+                 << "%, unknown: " << percent_unknown << "%";
+          wlog("${report}", ("report", report.str()));
+
+          cumulative_time_waiting_for_locks = fc::microseconds();
+          cumulative_time_processing_blocks = fc::microseconds();
+          cumulative_time_processing_transactions = fc::microseconds();
+          cumulative_time_waiting_for_work = fc::microseconds();
+          cumulative_times_last_reported_time = fc::time_point::now();
+        }
+      } // while running
+      ilog("Write processing thread finished.");
+    }
+    catch (const fc::exception& e)
+    {
+      elog("Unexpected exception is killing write_queue thread: ${e}", (e));
+    }
+    catch (const std::exception& e)
+    {
+      elog("Unexpected exception is killing write_queue thread: ${e}", ("e", e.what()));
+    }
+    catch (...)
+    {
+      elog("Unknown exception is killing write_queue thread.");
+    }
   });
 }
 
 void chain_plugin_impl::stop_write_processing()
 {
-  running = false;
+  hive::notify_hived_status("finished syncing");
+  {
+    std::unique_lock<std::mutex> lock(queue_mutex);
+    running = false;
+  }
+  queue_condition_variable.notify_one();
 
   if( write_processor_thread )
   {
@@ -373,7 +535,9 @@ void chain_plugin_impl::stop_write_processing()
 
 bool chain_plugin_impl::start_replay_processing()
 {
+  hive::notify_hived_status("replaying");
   bool replay_is_last_operation = replay_blockchain();
+  hive::notify_hived_status("finished replaying");
 
   if( replay_is_last_operation )
   {
@@ -427,9 +591,6 @@ void chain_plugin_impl::initial_settings()
   get_indexes_memory_details = [ this, &abstract_index_cntr ]
     (index_memory_details_cntr_t& index_memory_details_cntr, bool onlyStaticInfo)
   {
-    if( dump_memory_details == false )
-      return;
-
     for (auto idx : abstract_index_cntr)
     {
       auto info = idx->get_statistics(onlyStaticInfo);
@@ -452,45 +613,13 @@ void chain_plugin_impl::initial_settings()
   db_open_args.stop_replay_at = stop_replay_at;
   db_open_args.exit_after_replay = exit_after_replay;
   db_open_args.force_replay = force_replay;
+  db_open_args.validate_during_replay = validate_during_replay;
   db_open_args.benchmark_is_enabled = benchmark_is_enabled;
   db_open_args.database_cfg = database_config;
   db_open_args.replay_in_memory = replay_in_memory;
   db_open_args.replay_memory_indices = replay_memory_indices;
-
-  auto benchmark_lambda = [ this ] ( uint32_t current_block_number,
-    const chainbase::database::abstract_index_cntr_t& abstract_index_cntr )
-  {
-    if( current_block_number == 0 ) // initial call
-    {
-      typedef hive::utilities::benchmark_dumper::database_object_sizeof_cntr_t database_object_sizeof_cntr_t;
-      auto get_database_objects_sizeofs = [ this, &abstract_index_cntr ]
-        (database_object_sizeof_cntr_t& database_object_sizeof_cntr)
-      {
-        if ( dump_memory_details == false)
-          return;
-
-        for (auto idx : abstract_index_cntr)
-        {
-          auto info = idx->get_statistics(true);
-          database_object_sizeof_cntr.emplace_back(std::move(info._value_type_name), info._item_sizeof);
-        }
-      };
-
-      dumper.initialize( get_database_objects_sizeofs, BENCHMARK_FILE_NAME );
-      return;
-    }
-
-    const hive::utilities::benchmark_dumper::measurement& measure =
-      dumper.measure( current_block_number, get_indexes_memory_details );
-    ilog( "Performance report at block ${n}. Elapsed time: ${rt} ms (real), ${ct} ms (cpu). Memory usage: ${cm} (current), ${pm} (peak) kilobytes.",
-      ("n", current_block_number)
-      ("rt", measure.real_ms)
-      ("ct", measure.cpu_ms)
-      ("cm", measure.current_mem)
-      ("pm", measure.peak_mem) );
-  };
-
-  db_open_args.benchmark = hive::chain::TBenchmark( benchmark_interval, benchmark_lambda );
+  db_open_args.enable_block_log_compression = enable_block_log_compression;
+  db_open_args.block_log_compression_level = block_log_compression_level;
 }
 
 bool chain_plugin_impl::check_data_consistency()
@@ -531,14 +660,18 @@ void chain_plugin_impl::open()
     db.open( db_open_args );
 
     if( dump_memory_details )
+    {
+      setup_benchmark_dumper();
       dumper.dump( true, get_indexes_memory_details );
+    }
   }
   catch( const fc::exception& e )
   {
-    wlog( "Error opening database. If the binary or configuration has changed, replay the blockchain explicitly using `--replay-blockchain`." );
+    wlog( "Error opening database. If the binary or configuration has changed, replay the blockchain explicitly using `--force-replay`." );
     wlog( "If you know what you are doing you can skip this check and force open the database using `--force-open`." );
     wlog( "WARNING: THIS MAY CORRUPT YOUR DATABASE. FORCE OPEN AT YOUR OWN RISK." );
     wlog( " Error: ${e}", ("e", e) );
+    hive::notify_hived_status("exitting with open database error");
     exit(EXIT_FAILURE);
   }
 }
@@ -553,7 +686,7 @@ bool chain_plugin_impl::replay_blockchain()
 
     if( benchmark_interval > 0 )
     {
-      const hive::utilities::benchmark_dumper::measurement& total_data = dumper.dump( true, get_indexes_memory_details );
+      const hive::utilities::benchmark_dumper::measurement& total_data = dumper.dump( dump_memory_details, get_indexes_memory_details );
       ilog( "Performance report (total). Blocks: ${b}. Elapsed time: ${rt} ms (real), ${ct} ms (cpu). Memory usage: ${cm} (current), ${pm} (peak) kilobytes.",
           ("b", total_data.block_number)
           ("rt", total_data.real_ms)
@@ -585,6 +718,12 @@ void chain_plugin_impl::process_snapshot()
 void chain_plugin_impl::work( synchronization_type& on_sync )
 {
   ilog( "Started on blockchain with ${n} blocks, LIB: ${lb}", ("n", db.head_block_num())("lb", db.get_last_irreversible_block_num()) );
+  if(this->exit_before_sync)
+  {
+    ilog("Shutting down node without performing any action on user request");
+    appbase::app().generate_interrupt_request();
+    return;
+  }else ilog( "Started on blockchain with ${n} blocks", ("n", db.head_block_num()) );
 
   on_sync();
 
@@ -595,6 +734,26 @@ void chain_plugin_impl::write_default_database_config( bfs::path &p )
 {
   ilog( "writing database configuration: ${p}", ("p", p.string()) );
   fc::json::save_to_file( hive::utilities::default_database_configuration(), p );
+}
+
+void chain_plugin_impl::setup_benchmark_dumper()
+{
+  if(!this->dumper.is_initialized())
+  {
+    typedef hive::utilities::benchmark_dumper::database_object_sizeof_cntr_t database_object_sizeof_cntr_t;
+    const auto abstract_index_cntr = this->db.get_abstract_index_cntr();
+    auto get_database_objects_sizeofs = [ this, &abstract_index_cntr ]
+      (database_object_sizeof_cntr_t& database_object_sizeof_cntr)
+    {
+      database_object_sizeof_cntr.reserve(abstract_index_cntr.size());
+      for (auto idx : abstract_index_cntr)
+      {
+        auto info = idx->get_statistics(true);
+        database_object_sizeof_cntr.emplace_back(std::move(info._value_type_name), info._item_sizeof);
+      }
+    };
+    this->dumper.initialize( get_database_objects_sizeofs, (this->dump_memory_details ? BENCHMARK_FILE_NAME : "") );
+  }
 }
 
 } // detail
@@ -613,8 +772,14 @@ bfs::path chain_plugin::state_storage_dir() const
 
 void chain_plugin::set_program_options(options_description& cli, options_description& cfg)
 {
+#ifdef USE_ALTERNATE_CHAIN_ID
+  using hive::protocol::testnet_blockchain_configuration::configuration_data;
+  /// Default initminer priv. key in non-mainnet builds.
+  auto default_skeleton_privkey = hive::utilities::key_to_wif(configuration_data.get_default_initminer_private_key());
+#endif
+
   cfg.add_options()
-      ("shared-file-dir", bpo::value<bfs::path>()->default_value("blockchain"), // NOLINT(clang-analyzer-optin.cplusplus.VirtualCall)
+      ("shared-file-dir", bpo::value<bfs::path>()->default_value("blockchain")->value_name("dir"), // NOLINT(clang-analyzer-optin.cplusplus.VirtualCall)
         "the location of the chain shared memory files (absolute path or relative to application data dir)")
       ("shared-file-size", bpo::value<string>()->default_value("54G"), "Size of the shared memory file. Default: 54G. If running a full node, increase this value to 200G.")
       ("shared-file-full-threshold", bpo::value<uint16_t>()->default_value(0),
@@ -624,26 +789,32 @@ void chain_plugin::set_program_options(options_description& cli, options_descrip
       ("checkpoint,c", bpo::value<vector<string>>()->composing(), "Pairs of [BLOCK_NUM,BLOCK_ID] that should be enforced as checkpoints.")
       ("flush-state-interval", bpo::value<uint32_t>(),
         "flush shared memory changes to disk every N blocks")
+      ("enable-block-log-compression", boost::program_options::value<bool>()->default_value(true), "Compress blocks using zstd as they're added to the block log" )
+      ("block-log-compression-level", bpo::value<int>()->default_value(15), "Block log zstd compression level 0 (fast, low compression) - 22 (slow, high compression)" )
       ;
   cli.add_options()
       ("replay-blockchain", bpo::bool_switch()->default_value(false), "clear chain database and replay all blocks" )
       ("force-open", bpo::bool_switch()->default_value(false), "force open the database, skipping the environment check" )
       ("resync-blockchain", bpo::bool_switch()->default_value(false), "clear chain database and block log" )
       ("stop-replay-at-block", bpo::value<uint32_t>(), "Stop after reaching given block number")
-      ("exit-after-replay", bpo::bool_switch()->default_value(false), "Exit after reaching given block number")
+      ("exit-after-replay", bpo::bool_switch()->default_value(false), "[ DEPRECATED ] Exit after reaching given block number")
+      ("exit-before-sync", bpo::bool_switch()->default_value(false), "Exits before starting sync, handy for dumping snapshot without starting replay")
       ("force-replay", bpo::bool_switch()->default_value(false), "Before replaying clean all old files. If specifed, `--replay-blockchain` flag is implied")
+      ("validate-during-replay", bpo::bool_switch()->default_value(false), "Runs all validations that are normally turned off during replay")
       ("advanced-benchmark", "Make profiling for every plugin.")
       ("set-benchmark-interval", bpo::value<uint32_t>(), "Print time and memory usage every given number of blocks")
       ("dump-memory-details", bpo::bool_switch()->default_value(false), "Dump database objects memory usage info. Use set-benchmark-interval to set dump interval.")
       ("check-locks", bpo::bool_switch()->default_value(false), "Check correctness of chainbase locking" )
       ("validate-database-invariants", bpo::bool_switch()->default_value(false), "Validate all supply invariants check out" )
-#ifdef IS_TEST_NET
+#ifdef USE_ALTERNATE_CHAIN_ID
       ("chain-id", bpo::value< std::string >()->default_value( HIVE_CHAIN_ID ), "chain ID to connect to")
+      ("skeleton-key", bpo::value< std::string >()->default_value(default_skeleton_privkey), "WIF PRIVATE key to be used as skeleton key for all accounts")
 #endif
       ;
 }
 
 void chain_plugin::plugin_initialize(const variables_map& options) {
+  hive::utilities::notifications::setup_notifications(options);
   my->shared_memory_dir = app().data_dir() / "blockchain";
 
   if( options.count("shared-file-dir") )
@@ -666,19 +837,29 @@ void chain_plugin::plugin_initialize(const variables_map& options) {
   my->chainbase_flags |= options.at( "force-open" ).as< bool >() ? chainbase::skip_env_check : chainbase::skip_nothing;
 
   my->force_replay        = options.count( "force-replay" ) ? options.at( "force-replay" ).as<bool>() : false;
+  my->validate_during_replay =
+    options.count( "validate-during-replay" ) ? options.at( "validate-during-replay" ).as<bool>() : false;
   my->replay              = options.at( "replay-blockchain").as<bool>() || my->force_replay;
   my->resync              = options.at( "resync-blockchain").as<bool>();
   my->stop_replay_at      = options.count( "stop-replay-at-block" ) ? options.at( "stop-replay-at-block" ).as<uint32_t>() : 0;
-  my->exit_after_replay   = options.count( "exit-after-replay" ) ? options.at( "exit-after-replay" ).as<bool>() : false;
+  my->exit_before_sync    = options.count( "exit-before-sync" ) ? options.at( "exit-before-sync" ).as<bool>() : false;
   my->benchmark_interval  =
     options.count( "set-benchmark-interval" ) ? options.at( "set-benchmark-interval" ).as<uint32_t>() : 0;
   my->check_locks         = options.at( "check-locks" ).as< bool >();
   my->validate_invariants = options.at( "validate-database-invariants" ).as<bool>();
   my->dump_memory_details = options.at( "dump-memory-details" ).as<bool>();
+  my->enable_block_log_compression = options.at( "enable-block-log-compression" ).as<bool>();
+  my->block_log_compression_level = options.at( "block-log-compression-level" ).as<int>();
   if( options.count( "flush-state-interval" ) )
     my->flush_interval = options.at( "flush-state-interval" ).as<uint32_t>();
   else
     my->flush_interval = 10000;
+
+  if(options.at( "exit-after-replay" ).as<bool>())
+  {
+    my->exit_after_replay = true;
+    wlog("flag `--exit-after-replay` is deprecated, please consider usage of `--exit-before-sync` flag instead");
+  }
 
   if(options.count("checkpoint"))
   {
@@ -691,6 +872,7 @@ void chain_plugin::plugin_initialize(const variables_map& options) {
     }
   }
 
+  this->my->setup_benchmark_dumper();
   my->benchmark_is_enabled = (options.count( "advanced-benchmark" ) != 0);
 
   if( options.count( "statsd-record-on-replay" ) )
@@ -698,7 +880,7 @@ void chain_plugin::plugin_initialize(const variables_map& options) {
     my->statsd_on_replay = options.at( "statsd-record-on-replay" ).as< bool >();
   }
 
-#ifdef IS_TEST_NET
+#ifdef USE_ALTERNATE_CHAIN_ID
   if( options.count( "chain-id" ) )
   {
     auto chain_id_str = options.at("chain-id").as< std::string >();
@@ -707,12 +889,47 @@ void chain_plugin::plugin_initialize(const variables_map& options) {
     {
       my->db.set_chain_id( chain_id_type( chain_id_str) );
     }
-    catch( fc::exception& )
+    catch( const fc::exception& )
     {
       FC_ASSERT( false, "Could not parse chain_id as hex string. Chain ID String: ${s}", ("s", chain_id_str) );
     }
+
+    if(options.count("skeleton-key"))
+    {
+
+      const std::string& wif_key = options.at("skeleton-key").as<std::string>();
+
+      wlog("Setting custom skeleton key: ${sk}", ("sk", wif_key));
+
+      fc::optional<fc::ecc::private_key> skeleton_key = hive::utilities::wif_to_key(wif_key);
+      FC_ASSERT(skeleton_key.valid(), "unable to parse passed skeletpn key: ${sk}", ("sk", wif_key));
+
+      configuration_data.set_skeleton_key(*skeleton_key);
+    }
+
   }
 #endif
+
+  if(my->benchmark_interval > 0)
+  {
+    my->dumper_post_apply_block = db().add_post_apply_block_handler([&](const hive::chain::block_notification& note) noexcept {
+      const uint32_t current_block_number = note.block_num;
+      if( my->benchmark_interval && ( current_block_number % my->benchmark_interval == 0 ) )
+      {
+        const hive::utilities::benchmark_dumper::measurement& measure =
+          my->dumper.measure( current_block_number, my->get_indexes_memory_details );
+
+        ilog( "Performance report at block ${n}. Elapsed time: ${rt} ms (real), ${ct} ms (cpu). Memory usage: ${cm} (current), ${pm} (peak) kilobytes.",
+          ("n", current_block_number)
+          ("rt", measure.real_ms)
+          ("ct", measure.cpu_ms)
+          ("cm", measure.current_mem)
+          ("pm", measure.peak_mem) );
+
+        hive::notify("hived_benchmark", "multiindex_stats", fc::variant{measure});
+      }
+    }, *this, 0);
+  }
 }
 
 void chain_plugin::plugin_startup()
@@ -724,8 +941,9 @@ void chain_plugin::plugin_startup()
   ilog("Database opening...");
   my->open();
 
-  ilog("Snapshot processing...");
+  ilog("Looking for snapshot processing requests...");
   my->process_snapshot();
+
 
   if( my->replay )
   {
@@ -768,12 +986,13 @@ void chain_plugin::plugin_shutdown()
   my->stop_write_processing();
   my->db.close();
   ilog("database closed successfully");
+  hive::notify_hived_status("finished syncing");
 }
 
 void chain_plugin::register_snapshot_provider(state_snapshot_provider& provider)
-  {
+{
   my->register_snapshot_provider(provider);
-  }
+}
 
 void chain_plugin::report_state_options( const string& plugin_name, const fc::variant_object& opts )
 {
@@ -784,48 +1003,105 @@ void chain_plugin::report_state_options( const string& plugin_name, const fc::va
 void chain_plugin::connection_count_changed(uint32_t peer_count)
 {
   my->peer_count = peer_count;
+  fc_wlog(fc::logger::get("default"),"peer_count changed: ${peer_count}",(peer_count));
 }
 
-bool chain_plugin::accept_block( const hive::chain::signed_block& block, bool currently_syncing, uint32_t skip )
+bool chain_plugin::accept_block( const hive::chain::signed_block& block, bool currently_syncing, uint32_t skip, const lock_type lock /* = lock_type::boost */  )
 {
-  if (currently_syncing && block.block_num() % 10000 == 0) {
+  if (currently_syncing && block.block_num() % 10000 == 0)
     ilog("Syncing Blockchain --- Got block: #${n} time: ${t} producer: ${p}",
-        ("t", block.timestamp)
-        ("n", block.block_num())
-        ("p", block.witness) );
-  }
+         ("t", block.timestamp)
+         ("n", block.block_num())
+         ("p", block.witness) );
 
   check_time_in_block( block );
 
-  boost::promise< void > prom;
   write_context cxt;
   cxt.req_ptr = &block;
   cxt.skip = skip;
-  cxt.prom_ptr = &prom;
+  static int call_count = 0;
+  call_count++;
+  BOOST_SCOPE_EXIT(&call_count) {
+    --call_count;
+    fc_dlog(fc::logger::get("chainlock"), "<-- accept_block_calls_in_progress: ${call_count}", (call_count));
+  } BOOST_SCOPE_EXIT_END
 
-  my->write_queue.push( &cxt );
+  if (lock == lock_type::boost)
+  {
+    fc_dlog(fc::logger::get("chainlock"), "--> boost accept_block_calls_in_progress: ${call_count}", (call_count));
+    std::shared_ptr<boost::promise<void>> accept_block_promise = std::make_shared<boost::promise<void>>();
+    // note: whether boost's futures are named `future` or `unique_future` depends on the BOOST_THREAD_VERSION,
+    //       if this doesn't compile, see:
+    //       https://www.boost.org/doc/libs/1_78_0/doc/html/thread/build.html#thread.build.configuration.future
+    boost::unique_future<void> accept_block_future(accept_block_promise->get_future());
+    cxt.prom_ptr = accept_block_promise;
+    {
+      std::unique_lock<std::mutex> lock(my->queue_mutex);
+      my->write_queue.push(&cxt);
+    }
+    my->queue_condition_variable.notify_one();
+    accept_block_future.get();
+  }
+  else
+  {
+    fc_dlog(fc::logger::get("chainlock"), "--> fc accept_block_calls_in_progress: ${call_count}", (call_count));
+    fc::promise<void>::ptr accept_block_promise(new fc::promise<void>("accept_block"));
+    fc::future<void> accept_block_future(accept_block_promise);
+    cxt.prom_ptr = accept_block_promise;
+    {
+      std::unique_lock<std::mutex> lock(my->queue_mutex);
+      my->write_queue.push(&cxt);
+    }
+    my->queue_condition_variable.notify_one();
+    accept_block_future.wait();
+  }
 
-  prom.get_future().get();
-
-  if( cxt.except ) throw *(cxt.except);
+  if (cxt.except)
+    throw *(cxt.except);
 
   return cxt.success;
 }
 
-void chain_plugin::accept_transaction( const hive::chain::signed_transaction& trx )
+void chain_plugin::accept_transaction( const hive::chain::signed_transaction& trx, const lock_type lock /* = lock_type::boost */  )
 {
-  boost::promise< void > prom;
   write_context cxt;
   cxt.req_ptr = &trx;
-  cxt.prom_ptr = &prom;
+  static int call_count = 0;
+  call_count++;
+  BOOST_SCOPE_EXIT(&call_count) {
+    --call_count;
+    fc_dlog(fc::logger::get("chainlock"), "<-- accept_transaction_calls_in_progress: ${call_count}", (call_count));
+  } BOOST_SCOPE_EXIT_END
+  
+  if (lock == lock_type::boost)
+  {
+    fc_dlog(fc::logger::get("chainlock"), "--> boost accept_transaction_calls_in_progress: ${call_count}", (call_count));
+    std::shared_ptr<boost::promise<void>> accept_transaction_promise = std::make_shared<boost::promise<void>>();
+    boost::unique_future<void> accept_transaction_future(accept_transaction_promise->get_future());
+    cxt.prom_ptr = accept_transaction_promise;
+    {
+      std::unique_lock<std::mutex> lock(my->queue_mutex);
+      my->write_queue.push(&cxt);
+    }
+    my->queue_condition_variable.notify_one();
+    accept_transaction_future.get();
+  }
+  else
+  {
+    fc_dlog(fc::logger::get("chainlock"), "--> fc accept_transaction_calls_in_progress: ${call_count}", (call_count));
+    fc::promise<void>::ptr accept_transaction_promise(new fc::promise<void>("accept_transaction"));
+    fc::future<void> accept_transaction_future(accept_transaction_promise);
+    cxt.prom_ptr = accept_transaction_promise;
+    {
+      std::unique_lock<std::mutex> lock(my->queue_mutex);
+      my->write_queue.push(&cxt);
+    }
+    my->queue_condition_variable.notify_one();
+    accept_transaction_future.wait();
+  }
 
-  my->write_queue.push( &cxt );
-
-  prom.get_future().get();
-
-  if( cxt.except ) throw *(cxt.except);
-
-  return;
+  if (cxt.except) 
+    throw *(cxt.except);
 }
 
 hive::chain::signed_block chain_plugin::generate_block(
@@ -835,16 +1111,23 @@ hive::chain::signed_block chain_plugin::generate_block(
   uint32_t skip )
 {
   generate_block_request req( when, witness_owner, block_signing_private_key, skip );
-  boost::promise< void > prom;
   write_context cxt;
   cxt.req_ptr = &req;
-  cxt.prom_ptr = &prom;
 
-  my->write_queue.push( &cxt );
+  std::shared_ptr<boost::promise<void>> generate_block_promise = std::make_shared<boost::promise<void>>();
+  boost::unique_future<void> generate_block_future(generate_block_promise->get_future());
+  cxt.prom_ptr = generate_block_promise;
 
-  prom.get_future().get();
+  {
+    std::unique_lock<std::mutex> lock(my->queue_mutex);
+    my->write_queue.push(&cxt);
+  }
+  my->queue_condition_variable.notify_one();
 
-  if( cxt.except ) throw *(cxt.except);
+  generate_block_future.get();
+
+  if (cxt.except)
+    throw *(cxt.except);
 
   FC_ASSERT( cxt.success, "Block could not be generated" );
 

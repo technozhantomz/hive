@@ -180,6 +180,7 @@ namespace graphene { namespace net {
 
          virtual void error_encountered(const std::string& message, const fc::oexception& error) = 0;
 
+         virtual std::deque<block_id_type>::const_iterator find_first_item_not_in_blockchain(const std::deque<block_id_type>& item_hashes_received) = 0;
    };
 
    /**
@@ -216,7 +217,7 @@ namespace graphene { namespace net {
 
         void      load_configuration( const fc::path& configuration_directory );
 
-        virtual void      listen_to_p2p_network();
+        virtual void      listen_to_p2p_network( std::function<bool()> break_callback );
         virtual void      connect_to_p2p_network();
 
         /**
@@ -315,7 +316,7 @@ namespace graphene { namespace net {
     public:
       ~simulated_network();
       simulated_network(const std::string& user_agent) : node(user_agent) {}
-      void      listen_to_p2p_network() override {}
+      void      listen_to_p2p_network( std::function<bool()> break_callback ) override {}
       void      connect_to_p2p_network() override {}
       void      connect_to_endpoint(const fc::ip::endpoint& ep) override {}
 

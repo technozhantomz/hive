@@ -13,7 +13,6 @@
 #include <hive/chain/db_with.hpp>
 #include <hive/chain/evaluator_registry.hpp>
 #include <hive/chain/global_property_object.hpp>
-#include <hive/chain/history_object.hpp>
 #include <hive/chain/optional_action_evaluator.hpp>
 #include <hive/chain/pending_required_action_object.hpp>
 #include <hive/chain/pending_optional_action_object.hpp>
@@ -43,6 +42,7 @@
 #include <fc/io/fstream.hpp>
 
 #include <boost/scope_exit.hpp>
+#include <boost/range/adaptor/reversed.hpp>
 
 #include <iostream>
 
@@ -55,19 +55,20 @@
 
 long next_hf_time()
 {
-  // current "next hardfork" is HF25
+  // current "next hardfork" is HF26
   long hfTime =
+
 #ifdef IS_TEST_NET
-    1622808000; //  Friday, 4 June 2021 12:00:00
+    1643716800; // Tuesday, 1 February 2022 12:00:00
 #else
-    1625061600; //  Wednesday, 30 June 2021 14:00:00
+    1656590400; // Thursday, 30 June 2022 12:00:00
 #endif /// IS_TEST_NET
 
-  const char* value = getenv("HIVE_HF25_TIME");
+  const char* value = getenv("HIVE_HF26_TIME");
   if(value != nullptr)
   {
     hfTime = atol(value);
-    ilog("HIVE_HF25_TIME has been specified through environment variable as ${v}, long value: ${l}", ("v", value)("l", hfTime));
+    ilog("HIVE_HF26_TIME has been specified through environment variable as ${v}, long value: ${l}", ("v", value)("l", hfTime));
   }
 
   return hfTime;
@@ -145,77 +146,114 @@ void database::open( const open_args& args )
                                               );
     chainbase::database::open( args.shared_mem_dir, args.chainbase_flags, args.shared_file_size, args.database_cfg, &environment_extension, args.force_replay );
 
-    initialize_indexes();
-    initialize_evaluators();
-    initialize_irreversible_storage();
+    initialize_state_independent_data(args);
+    load_state_initial_data(args);
 
-    if( !find< dynamic_global_property_object >() )
-      with_write_lock( [&]()
-      {
-        init_genesis( args.initial_supply, args.hbd_initial_supply );
-      });
+  }
+  FC_CAPTURE_LOG_AND_RETHROW( (args.data_dir)(args.shared_mem_dir)(args.shared_file_size) )
+}
 
-    _benchmark_dumper.set_enabled( args.benchmark_is_enabled );
+void database::initialize_state_independent_data(const open_args& args)
+{
+  initialize_indexes();
+  initialize_evaluators();
+  initialize_irreversible_storage();
 
-    with_write_lock( [&]()
+  if(!find< dynamic_global_property_object >())
+  {
+    with_write_lock([&]()
     {
-      _block_log.open( args.data_dir / "block_log" );
+      init_genesis(args.initial_supply, args.hbd_initial_supply);
     });
+  }
 
-   auto hb = head_block_num();
-   auto last_irreversible_block = get_last_irreversible_block_num();
+  _benchmark_dumper.set_enabled(args.benchmark_is_enabled);
+  if( _benchmark_dumper.is_enabled() &&
+      ( !_pre_apply_operation_signal.empty() || !_post_apply_operation_signal.empty() ) )
+  {
+    wlog( "BENCHMARK will run into nested measurements - data on operations that emit vops will be lost!!!" );
+  }
 
-   FC_ASSERT(hb >= last_irreversible_block);
+  with_write_lock([&]()
+  {
+    _block_log.open(args.data_dir / "block_log");
+    _block_log.set_compression(args.enable_block_log_compression);
+    _block_log.set_compression_level(args.block_log_compression_level);
+  });
 
-   ilog("Opened a blockchain database holding a state specific to head block: ${hb} and last irreversible block: ${lb}", ("hb", hb)("lb", last_irreversible_block));
+  _shared_file_full_threshold = args.shared_file_full_threshold;
+  _shared_file_scale_rate = args.shared_file_scale_rate;
 
-    // Rewind all undo state. This should return us to the state at the last irreversible block.
-    with_write_lock( [&]()
+  /// Initialize all static (state independent) specific to hardforks
+  init_hardforks();
+}
+
+void database::load_state_initial_data(const open_args& args)
+{
+  auto hb = head_block_num();
+  auto last_irreversible_block = get_last_irreversible_block_num();
+
+  FC_ASSERT(hb >= last_irreversible_block);
+
+  ilog("Loaded a blockchain database holding a state specific to head block: ${hb} and last irreversible block: ${lb}", ("hb", hb)("lb", last_irreversible_block));
+
+   // Rewind all undo state. This should return us to the state at the last irreversible block.
+  with_write_lock([&]()
     {
+      ilog("Attempting to rewind all undo state...");
+
       undo_all();
 
+      ilog("Rewind undo state done.");
+
       auto new_hb = head_block_num();
+      notify_switch_fork( new_hb );
+
 
       FC_ASSERT(new_hb >= last_irreversible_block);
-      
+
       FC_ASSERT(this->get_last_irreversible_block_num() == last_irreversible_block, "Undo operation should not touch irreversible block value");
 
       ilog("Blockchain state database is AT IRREVERSIBLE state specific to head block: ${hb} and LIB: ${lb}", ("hb", head_block_num())("lb", this->get_last_irreversible_block_num()));
 
-      if( args.chainbase_flags & chainbase::skip_env_check )
+      if(args.chainbase_flags & chainbase::skip_env_check)
       {
-        set_revision( head_block_num() );
+        set_revision(head_block_num());
       }
       else
       {
-        FC_ASSERT( revision() == head_block_num(), "Chainbase revision does not match head block num.",
-          ("rev", revision())("head_block", head_block_num()) );
-        if (args.do_validate_invariants)
+        FC_ASSERT(revision() == head_block_num(), "Chainbase revision does not match head block num.",
+          ("rev", revision())("head_block", head_block_num()));
+        if(args.do_validate_invariants)
           validate_invariants();
       }
     });
 
-    if( head_block_num() )
-    {
-      optional<signed_block> head_block = _block_log.read_block_by_num( head_block_num() );
-      // This assertion should be caught and a reindex should occur
-      FC_ASSERT( head_block && head_block->id() == head_block_id(), "Chain state does not match block log. Please reindex blockchain." );
+  if(head_block_num())
+  {
+    optional<signed_block> head_block = _block_log.read_block_by_num(head_block_num());
+    // This assertion should be caught and a reindex should occur
+    FC_ASSERT(head_block && head_block->id() == head_block_id(), "Chain state does not match block log. Please reindex blockchain.");
 
-      _fork_db.start_block( *head_block );
-    }
+    _fork_db.start_block(*head_block);
+  }
 
-    with_read_lock( [&]()
-    {
-      init_hardforks(); // Writes to local state, but reads from db
-    });
-
-#ifdef IS_TEST_NET
-  /// Leave the chain-id passed to cmdline option.
-#else
-    with_read_lock( [&]()
+  with_read_lock([&]()
     {
       const auto& hardforks = get_hardfork_property_object();
-      if (hardforks.last_hardfork >= HIVE_HARDFORK_1_24)
+      FC_ASSERT(hardforks.last_hardfork <= HIVE_NUM_HARDFORKS, "Chain knows of more hardforks than configuration", ("hardforks.last_hardfork", hardforks.last_hardfork)("HIVE_NUM_HARDFORKS", HIVE_NUM_HARDFORKS));
+      FC_ASSERT(_hardfork_versions.versions[hardforks.last_hardfork] <= HIVE_BLOCKCHAIN_VERSION, "Blockchain version is older than last applied hardfork");
+      FC_ASSERT(HIVE_BLOCKCHAIN_HARDFORK_VERSION >= HIVE_BLOCKCHAIN_VERSION);
+      FC_ASSERT(HIVE_BLOCKCHAIN_HARDFORK_VERSION == _hardfork_versions.versions[HIVE_NUM_HARDFORKS]);
+    });
+
+#ifdef USE_ALTERNATE_CHAIN_ID
+  /// Leave the chain-id passed to cmdline option.
+#else
+  with_read_lock([&]()
+    {
+      const auto& hardforks = get_hardfork_property_object();
+      if(hardforks.last_hardfork >= HIVE_HARDFORK_1_24)
       {
         ilog("Loaded blockchain which had already processed hardfork 24, setting Hive chain id");
         set_chain_id(HIVE_CHAIN_ID);
@@ -223,71 +261,69 @@ void database::open( const open_args& args )
     });
 #endif /// IS_TEST_NET
 
-    if (args.benchmark.first)
-    {
-      args.benchmark.second(0, get_abstract_index_cntr());
-      auto last_block_num = _block_log.head()->block_num();
-      args.benchmark.second(last_block_num, get_abstract_index_cntr());
-    }
 
-    _shared_file_full_threshold = args.shared_file_full_threshold;
-    _shared_file_scale_rate = args.shared_file_scale_rate;
-
-    auto account = find< account_object, by_name >( "nijeah" );
-    if( account != nullptr && account->to_withdraw < 0 )
-    {
-      auto session = start_undo_session();
-      modify( *account, []( account_object& a )
+  auto account = find< account_object, by_name >("nijeah");
+  if(account != nullptr && account->to_withdraw < 0)
+  {
+    auto session = start_undo_session();
+    modify(*account, [](account_object& a)
       {
         a.to_withdraw = 0;
         a.next_vesting_withdrawal = fc::time_point_sec::maximum();
       });
-      session.squash();
-    }
+    session.squash();
   }
-  FC_CAPTURE_LOG_AND_RETHROW( (args.data_dir)(args.shared_mem_dir)(args.shared_file_size) )
+
 }
+
 
 uint32_t database::reindex_internal( const open_args& args, signed_block& block )
 {
-  uint64_t skip_flags =
-    skip_witness_signature |
-    skip_transaction_signatures |
-    skip_transaction_dupe_check |
-    skip_tapos_check |
-    skip_merkle_check |
-    skip_witness_schedule_check |
-    skip_authority_check |
-    skip_validate | /// no need to validate operations
-    skip_validate_invariants |
-    skip_block_log;
+  uint64_t skip_flags = skip_validate_invariants | skip_block_log;
+  if( !args.validate_during_replay )
+  {
+    skip_flags |= skip_witness_signature |
+      skip_transaction_signatures |
+      skip_transaction_dupe_check |
+      skip_tapos_check |
+      skip_merkle_check |
+      skip_witness_schedule_check |
+      skip_authority_check |
+      skip_validate; /// no need to validate operations
+  }
 
   uint32_t last_block_num = _block_log.head()->block_num();
   if( args.stop_replay_at > 0 && args.stop_replay_at < last_block_num )
     last_block_num = args.stop_replay_at;
-  if( args.benchmark.first > 0 )
-  {
-    args.benchmark.second( 0, get_abstract_index_cntr() );
-  }
 
   bool rat = fc::enable_record_assert_trip;
   bool as = fc::enable_assert_stacktrace;
   fc::enable_record_assert_trip = true; //enable detailed backtrace from FC_ASSERT (that should not ever be triggered during replay)
   fc::enable_assert_stacktrace = true;
 
+  BOOST_SCOPE_EXIT( this_ ) { this_->clear_tx_status(); } BOOST_SCOPE_EXIT_END
+  set_tx_status( TX_STATUS_BLOCK );
+
   while( !appbase::app().is_interrupt_request() && block.block_num() != last_block_num )
   {
     uint32_t cur_block_num = block.block_num();
 
-    apply_block( block, skip_flags );
+    if (cur_block_num % 100000 == 0)
+    {
+      std::ostringstream percent_complete_stream;
+      percent_complete_stream << std::fixed << std::setprecision(2) << double(cur_block_num) * 100 / last_block_num;
+      ulog("   ${cur_block_num} of ${last_block_num} blocks = ${percent_complete}%   (${free_memory_megabytes}MB shared memory free)",
+           ("percent_complete", percent_complete_stream.str())
+           (cur_block_num)(last_block_num)
+           ("free_memory_megabytes", get_free_memory() >> 20));
+    }
 
-    if( (args.benchmark.first > 0) && (cur_block_num % args.benchmark.first == 0) )
-      args.benchmark.second( cur_block_num, get_abstract_index_cntr() );
+    apply_block( block, skip_flags );
 
     if( !appbase::app().is_interrupt_request() )
     {
       optional<signed_block> next_block = _block_log.read_block_by_num(cur_block_num + 1);
-      FC_ASSERT(next_block, "Unable to read block ${block_num} from the block log during reindexing, but it should be in the log", 
+      FC_ASSERT(next_block, "Unable to read block ${block_num} from the block log during reindexing, but it should be in the log",
                 ("block_num", cur_block_num + 1));
       block = std::move(*next_block);
     }
@@ -345,14 +381,26 @@ uint32_t database::reindex( const open_args& args )
 
     uint32_t _head_block_num = head_block_num();
 
+    auto _head = _block_log.head();
+    if( _head )
+    {
+      if( args.stop_replay_at == 0 )
+        note.max_block_number = _head->block_num();
+      else
+        note.max_block_number = std::min( args.stop_replay_at, _head->block_num() );
+    }
+    else
+      note.max_block_number = 0;//anyway later an assert is triggered
+
     note.force_replay = args.force_replay || _head_block_num == 0;
+    note.validate_during_replay = args.validate_during_replay;
 
     HIVE_TRY_NOTIFY(_pre_reindex_signal, note);
 
     _fork_db.reset();    // override effect of _fork_db.start_block() call in open()
 
     auto start_time = fc::time_point::now();
-    HIVE_ASSERT( _block_log.head(), block_log_exception, "No blocks in block log. Cannot reindex an empty chain." );
+    HIVE_ASSERT( _head, block_log_exception, "No blocks in block log. Cannot reindex an empty chain." );
 
     ilog( "Replaying blocks..." );
 
@@ -393,8 +441,6 @@ uint32_t database::reindex( const open_args& args )
         note.last_block_number = start_block->block_num();
       }
 
-      if( (args.benchmark.first > 0) && (note.last_block_number % args.benchmark.first == 0) )
-        args.benchmark.second( note.last_block_number, get_abstract_index_cntr() );
       set_revision( head_block_num() );
 
       //get_index< account_index >().indices().print_stats();
@@ -404,7 +450,7 @@ uint32_t database::reindex( const open_args& args )
       _fork_db.start_block( *_block_log.head() );
 
     auto end_time = fc::time_point::now();
-    ilog("Done reindexing, elapsed time: ${elapsed_time} sec", 
+    ilog("Done reindexing, elapsed time: ${elapsed_time} sec",
          ("elapsed_time", double((end_time - start_time).count()) / 1000000.0));
 
     note.reindex_success = true;
@@ -458,9 +504,24 @@ void database::close(bool rewind)
   FC_CAPTURE_AND_RETHROW()
 }
 
-bool database::is_known_block( const block_id_type& id )const
+//no chainbase lock required
+bool database::is_known_block(const block_id_type& id)const
 { try {
-  return fetch_block_by_id( id ).valid();
+  if (_fork_db.fetch_block(id))
+    return true;
+
+  optional<signed_block_header> block_header_from_block_log = _block_log.read_block_header_by_num(protocol::block_header::num_from_id(id));
+  return block_header_from_block_log ? block_header_from_block_log->id() == id : false;
+} FC_CAPTURE_AND_RETHROW() }
+
+//no chainbase lock required, but fork database read lock is required
+bool database::is_known_block_unlocked(const block_id_type& id)const
+{ try {
+  if (_fork_db.fetch_block_unlocked(id))
+    return true;
+
+  optional<signed_block_header> block_header_from_block_log = _block_log.read_block_header_by_num(protocol::block_header::num_from_id(id));
+  return block_header_from_block_log ? block_header_from_block_log->id() == id : false;
 } FC_CAPTURE_AND_RETHROW() }
 
 /**
@@ -474,13 +535,14 @@ bool database::is_known_transaction( const transaction_id_type& id )const
   return trx_idx.find( id ) != trx_idx.end();
 } FC_CAPTURE_AND_RETHROW() }
 
+//no chainbase lock required
 block_id_type database::find_block_id_for_num( uint32_t block_num )const
 {
   try
   {
     if( block_num == 0 )
       return block_id_type();
-
+/*
     // Reversible blocks are *usually* in the TAPOS buffer.  Since this
     // is the fastest check, we do it first.
     block_summary_object::id_type bsid( block_num & 0xFFFF );
@@ -490,74 +552,79 @@ block_id_type database::find_block_id_for_num( uint32_t block_num )const
       if( protocol::block_header::num_from_id(bs->block_id) == block_num )
         return bs->block_id;
     }
+*/
 
-    // Next we query the block log.   Irreversible blocks are here.
-    optional<signed_block> b = _block_log.read_block_by_num( block_num );
-    if( b )
-      return b->id();
-
-    // Finally we query the fork DB.
-    shared_ptr< fork_item > fitem = _fork_db.fetch_block_on_main_branch_by_number( block_num );
+    // See if fork DB has the item
+    shared_ptr<fork_item> fitem = _fork_db.fetch_block_on_main_branch_by_number( block_num );
     if( fitem )
       return fitem->id;
 
-    return block_id_type();
+    // Next we check if block_log has it. Irreversible blocks are here.
+    optional<signed_block_header> b = _block_log.read_block_header_by_num( block_num );
+    if( b )
+      return b->id();
+    return block_id_type(); //this block_num couldn't be found
   }
   FC_CAPTURE_AND_RETHROW( (block_num) )
 }
 
+//no chainbase lock required
 block_id_type database::get_block_id_for_num( uint32_t block_num )const
 {
   block_id_type bid = find_block_id_for_num( block_num );
-  FC_ASSERT( bid != block_id_type() );
+  if (bid == block_id_type())
+    FC_THROW_EXCEPTION(fc::key_not_found_exception, "block number not found");
   return bid;
 }
 
-
+//no chainbase lock required
 optional<signed_block> database::fetch_block_by_id( const block_id_type& id )const
 { try {
-  auto b = _fork_db.fetch_block( id );
-  if( !b )
-  {
-    optional<signed_block> tmp = _block_log.read_block_by_num( protocol::block_header::num_from_id( id ) );
+  shared_ptr<fork_item> fork_item = _fork_db.fetch_block( id );
+  if (fork_item)
+    return fork_item->data;
 
-    if( tmp && tmp->id() == id )
-      return *tmp;
-
-    return optional<signed_block>();
-  }
-
-  return b->data;
+  optional<signed_block> block_from_block_log = _block_log.read_block_by_num( protocol::block_header::num_from_id( id ) );
+  if( block_from_block_log && block_from_block_log->id() == id )
+    return *block_from_block_log;
+  return optional<signed_block>();
 } FC_CAPTURE_AND_RETHROW() }
 
-// this version of fetch_block_by_number() assumes the caller is holding a read lock on the database
-optional<signed_block> database::fetch_block_by_number( uint32_t block_num )const
+//no chainbase lock required
+optional<signed_block_header> database::fetch_block_header_by_id( const block_id_type& id )const
 { try {
-  shared_ptr< fork_item > fitem = _fork_db.fetch_block_on_main_branch_by_number( block_num );
+  shared_ptr<fork_item> forkdb_item = _fork_db.fetch_block( id );
+  if (forkdb_item)
+    return forkdb_item->data;
 
-  if( fitem )
-    return fitem->data;
-  else
-    return _block_log.read_block_by_num( block_num ); 
+  optional<signed_block_header> block_header_from_block_log = _block_log.read_block_header_by_num( protocol::block_header::num_from_id( id ) );
+  if (block_header_from_block_log && block_header_from_block_log->id() == id)
+    return *block_header_from_block_log;
+  return optional<signed_block>();
+} FC_CAPTURE_AND_RETHROW() }
+
+//no chainbase lock required
+optional<signed_block_header> database::fetch_block_header_by_number( uint32_t num, fc::microseconds wait_for_microseconds )const
+{ try {
+  shared_ptr<fork_item> forkdb_item = _fork_db.fetch_block_on_main_branch_by_number( num, wait_for_microseconds );
+  if (forkdb_item)
+    return forkdb_item->data;
+
+  return _block_log.read_block_header_by_num(num);
+} FC_CAPTURE_AND_RETHROW() }
+
+//no chainbase lock required
+optional<signed_block> database::fetch_block_by_number( uint32_t block_num, fc::microseconds wait_for_microseconds )const
+{ try {
+  shared_ptr<fork_item> forkdb_item  = _fork_db.fetch_block_on_main_branch_by_number( block_num, wait_for_microseconds );
+  if (forkdb_item )
+    return forkdb_item ->data;
+
+  return _block_log.read_block_by_num( block_num );
 } FC_LOG_AND_RETHROW() }
 
-// this version doesn't assume the caller has a read lock.  It will get its own lock for the
-// portion of the function that requires it.
-optional<signed_block> database::fetch_block_by_number_unlocked( uint32_t block_num )
-{ try {
-  shared_ptr< fork_item > fitem;
-  with_read_lock( [&]()
-  {
-    fitem = _fork_db.fetch_block_on_main_branch_by_number( block_num );
-  });
-
-  if( fitem )
-    return fitem->data;
-  else
-    return _block_log.read_block_by_num( block_num ); 
-} FC_LOG_AND_RETHROW() }
-
-std::vector<signed_block> database::fetch_block_range_unlocked( const uint32_t starting_block_num, const uint32_t count )
+//no chainbase lock required
+std::vector<signed_block> database::fetch_block_range( const uint32_t starting_block_num, const uint32_t count, fc::microseconds wait_for_microseconds )
 { try {
   // for debugging, put the head block back so it should straddle the last irreversible
   // const uint32_t starting_block_num = head_block_num() - 30;
@@ -566,11 +633,7 @@ std::vector<signed_block> database::fetch_block_range_unlocked( const uint32_t s
   FC_ASSERT(count <= 1000, "You can only ask for 1000 blocks at a time");
   idump((starting_block_num)(count));
 
-  vector<fork_item> fork_items;
-  with_read_lock( [&]()
-  {
-    fork_items = _fork_db.fetch_block_range_on_main_branch_by_number( starting_block_num, count );
-  });
+  vector<fork_item> fork_items = _fork_db.fetch_block_range_on_main_branch_by_number( starting_block_num, count, wait_for_microseconds );
   idump((fork_items.size()));
   if (!fork_items.empty())
     idump((fork_items.front().num));
@@ -590,7 +653,7 @@ std::vector<signed_block> database::fetch_block_range_unlocked( const uint32_t s
     idump((result.front().block_num())(result.back().block_num()));
   result.reserve(result.size() + fork_items.size());
   for (fork_item& item : fork_items)
-    result.emplace_back(std::move(item.data));
+    result.push_back(std::move(item.data));
 
   return result;
 } FC_LOG_AND_RETHROW() }
@@ -605,6 +668,8 @@ const signed_transaction database::get_recent_transaction( const transaction_id_
   return trx;;
 } FC_CAPTURE_AND_RETHROW() }
 
+
+//no chainbase lock required
 std::vector< block_id_type > database::get_block_ids_on_fork( block_id_type head_of_fork ) const
 { try {
   pair<fork_database::branch_type, fork_database::branch_type> branches = _fork_db.fetch_branch_from(head_block_id(), head_of_fork);
@@ -630,16 +695,16 @@ chain_id_type database::get_chain_id() const
 
 chain_id_type database::get_old_chain_id() const
 {
-#ifdef IS_TEST_NET
+#ifdef USE_ALTERNATE_CHAIN_ID
   return hive_chain_id; /// In testnet always use the chain-id passed as hived option
 #else
-  return STEEM_CHAIN_ID;
+  return OLD_CHAIN_ID;
 #endif /// IS_TEST_NET
 }
 
 chain_id_type database::get_new_chain_id() const
 {
-#ifdef IS_TEST_NET
+#ifdef USE_ALTERNATE_CHAIN_ID
   return hive_chain_id; /// In testnet always use the chain-id passed as hived option
 #else
   return HIVE_CHAIN_ID;
@@ -681,7 +746,7 @@ void database::foreach_tx(std::function<bool(const signed_block_header&, const s
     uint32_t txInBlock = 0;
     for( const auto& trx : block.transactions )
     {
-      if(processor(prevBlockHeader, block, trx, txInBlock) == false)
+      if(processor(prevBlockHeader, block, trx.trx, txInBlock) == false)
         return false;
       ++txInBlock;
     }
@@ -723,7 +788,7 @@ const witness_object* database::find_witness( const account_name_type& name ) co
 
 std::string database::get_treasury_name( uint32_t hardfork ) const
 {
-  if( hardfork >= HIVE_TREASURY_RENAME_HARDFORK )
+  if( hardfork >= HIVE_HARDFORK_1_24_TREASURY_RENAME )
     return NEW_HIVE_TREASURY_ACCOUNT;
   else
     return OBSOLETE_TREASURY_ACCOUNT;
@@ -874,7 +939,7 @@ const comment_object& database::get_comment_for_payout_time( const comment_objec
   if( has_hardfork( HIVE_HARDFORK_0_17__769 ) || comment.is_root() )
     return comment;
   else
-    return get< comment_object >( comment.get_root_id() );
+    return get< comment_object >( find_comment_cashout_ex( comment )->get_root_id() );
 }
 
 const time_point_sec database::calculate_discussion_payout_time( const comment_object& comment )const
@@ -883,25 +948,24 @@ const time_point_sec database::calculate_discussion_payout_time( const comment_o
 
   const comment_cashout_object* comment_cashout = find_comment_cashout( _comment );
   if( comment_cashout )
-    return comment_cashout->cashout_time;
+    return comment_cashout->get_cashout_time();
   else
     return time_point_sec::maximum();
 }
 
-const time_point_sec database::calculate_discussion_payout_time( const comment_cashout_object& comment_cashout )const
+const time_point_sec database::calculate_discussion_payout_time( const comment_object& comment, const comment_cashout_object& comment_cashout )const
 {
-  const comment_object& comment = get_comment( comment_cashout );
   const comment_object& _comment = get_comment_for_payout_time( comment );
 
   if( _comment.get_id() == comment.get_id() )
   {
-    return comment_cashout.cashout_time;
+    return comment_cashout.get_cashout_time();
   }
   else
   {
     const comment_cashout_object* _comment_cashout = find_comment_cashout( _comment );
     if( _comment_cashout )
-      return _comment_cashout->cashout_time;
+      return _comment_cashout->get_cashout_time();
     else
       return time_point_sec::maximum();
   }
@@ -919,7 +983,7 @@ const comment_cashout_object* database::find_comment_cashout( const comment_obje
 
 const comment_cashout_object* database::find_comment_cashout( comment_id_type comment_id ) const
 {
-  const auto& idx = get_index< comment_cashout_index >().indices().get< by_id >();
+  const auto& idx = get_index< comment_cashout_index, by_id >();
   comment_cashout_object::id_type ccid( comment_id );
   auto found = idx.find( ccid );
 
@@ -927,6 +991,24 @@ const comment_cashout_object* database::find_comment_cashout( comment_id_type co
     return nullptr;
   else
     return &( *found );
+}
+
+const comment_cashout_ex_object* database::find_comment_cashout_ex( const comment_object& comment ) const
+{
+  return find_comment_cashout_ex( comment.get_id() );
+}
+
+const comment_cashout_ex_object* database::find_comment_cashout_ex( comment_id_type comment_id ) const
+{
+  if( has_hardfork( HIVE_HARDFORK_0_19 ) )
+    return nullptr;
+
+  const auto& idx = get_index< comment_cashout_ex_index, by_id >();
+  comment_cashout_ex_object::id_type ccid( comment_id );
+  auto found = idx.find( ccid );
+
+  FC_ASSERT( found != idx.end() );
+  return &( *found );
 }
 
 const comment_object& database::get_comment( const comment_cashout_object& comment_cashout ) const
@@ -939,9 +1021,14 @@ const comment_object& database::get_comment( const comment_cashout_object& comme
   return *found;
 }
 
-void database::remove_old_comments()
+void database::remove_old_cashouts()
 {
-  const auto& idx = get_index< comment_cashout_index >().indices().get< by_cashout_time >();
+  // Remove all cashout extras
+  auto& comment_cashout_ex_idx = get_mutable_index< comment_cashout_ex_index >();
+  comment_cashout_ex_idx.clear();
+
+  // Remove regular cashouts for paid comments
+  const auto& idx = get_index< comment_cashout_index, by_cashout_time >();
   auto itr = idx.find( fc::time_point_sec::maximum() );
 
   while( itr != idx.end() )
@@ -961,7 +1048,7 @@ asset database::get_effective_vesting_shares( const account_object& account, ass
   FC_ASSERT( vested_symbol.space() == asset_symbol_type::smt_nai_space );
   FC_ASSERT( vested_symbol.is_vesting() );
 
-#pragma message( "TODO: Update the code below when delegation is modified to support SMTs." )
+FC_TODO( "Update the code below when delegation is modified to support SMTs." )
   const account_regular_balance_object* bo = find< account_regular_balance_object, by_owner_liquid_symbol >(
     boost::make_tuple( account.get_id(), vested_symbol.get_paired_symbol() ) );
   if( bo == nullptr )
@@ -1077,6 +1164,7 @@ bool database::_push_block(const signed_block& new_block)
     _maybe_warn_multiple_production( new_head->num );
 
     //If the head block from the longest chain does not build off of the current head, we need to switch forks.
+    //(if the new block builds off our head block, this check will skip the fork-switching code)
     if( new_head->data.previous != head_block_id() )
     {
       //If the newly pushed block is the same height as head, we get head back in new_head
@@ -1086,57 +1174,78 @@ bool database::_push_block(const signed_block& new_block)
         wlog( "Switching to fork: ${id}", ("id",new_head->data.id()) );
         auto branches = _fork_db.fetch_branch_from(new_head->data.id(), head_block_id());
 
-        // pop blocks until we hit the forked block
+        // pop blocks until we hit the common ancestor block
         while( head_block_id() != branches.second.back()->data.previous )
           pop_block();
+
+        notify_switch_fork( head_block_num() );
 
         // push all blocks on the new fork
         for( auto ritr = branches.first.rbegin(); ritr != branches.first.rend(); ++ritr )
         {
-            ilog( "pushing blocks from fork ${n} ${id}", ("n",(*ritr)->data.block_num())("id",(*ritr)->data.id()) );
-            optional<fc::exception> except;
-            try
+          ilog( "pushing blocks from fork ${n} ${id}", ("n",(*ritr)->data.block_num())("id",(*ritr)->data.id()) );
+          std::shared_ptr<fc::exception> delayed_exception_to_avoid_yield_in_catch;
+          try
+          {
+            BOOST_SCOPE_EXIT( this_ ) { this_->clear_tx_status(); } BOOST_SCOPE_EXIT_END
+            // we have to treat blocks from fork as not validated
+            set_tx_status( database::TX_STATUS_INC_BLOCK );
+            _fork_db.set_head( *ritr );
+            auto session = start_undo_session();
+            apply_block( (*ritr)->data, skip );
+            session.push();
+          }
+          catch( const fc::exception& e )
+          {
+            delayed_exception_to_avoid_yield_in_catch = e.dynamic_copy_exception();
+          }
+          if (delayed_exception_to_avoid_yield_in_catch)
+          {
+            wlog( "exception thrown while switching forks ${e}", ( "e", delayed_exception_to_avoid_yield_in_catch->to_detail_string() ) );
+            // remove the rest of branches.first from the fork_db, those blocks are invalid
+            while( ritr != branches.first.rend() )
             {
+              _fork_db.remove( (*ritr)->data.id() );
+              ++ritr;
+            }
+
+            // pop all blocks from the bad fork
+            while( head_block_id() != branches.second.back()->data.previous )
+              pop_block();
+            notify_switch_fork( head_block_num() );
+
+            // restore all blocks from the good fork
+            for( auto ritr = branches.second.rbegin(); ritr != branches.second.rend(); ++ritr )
+            {
+              BOOST_SCOPE_EXIT( this_ ) { this_->clear_tx_status(); } BOOST_SCOPE_EXIT_END
+              // even though those blocks were already processed before, it is safer to treat them as completely new,
+              // especially since alternative would be to treat them as replayed blocks, but that would be misleading
+              // since replayed blocks are already irreversible, while these are clearly reversible
+              set_tx_status( database::TX_STATUS_INC_BLOCK );
               _fork_db.set_head( *ritr );
               auto session = start_undo_session();
               apply_block( (*ritr)->data, skip );
               session.push();
             }
-            catch ( const fc::exception& e ) { except = e; }
-            if( except )
-            {
-              wlog( "exception thrown while switching forks ${e}", ("e",except->to_detail_string() ) );
-              // remove the rest of branches.first from the fork_db, those blocks are invalid
-              while( ritr != branches.first.rend() )
-              {
-                _fork_db.remove( (*ritr)->data.id() );
-                ++ritr;
-              }
-
-              // pop all blocks from the bad fork
-              while( head_block_id() != branches.second.back()->data.previous )
-                pop_block();
-
-              // restore all blocks from the good fork
-              for( auto ritr = branches.second.rbegin(); ritr != branches.second.rend(); ++ritr )
-              {
-                _fork_db.set_head( *ritr );
-                auto session = start_undo_session();
-                apply_block( (*ritr)->data, skip );
-                session.push();
-              }
-              throw *except;
-            }
+            delayed_exception_to_avoid_yield_in_catch->dynamic_rethrow_exception();
+          }
         }
+        hive::notify( "switching forks",
+          "id", new_head->id.str(),
+          "num", new_head->num
+        );
         return true;
       }
-      else
+      else //the new block is on a fork but lower than our head block, so don't validate it
         return false;
-    }
-  }
+    } //if not building off current head block
+  } //if fork checking enabled
 
+  //we are either not doing fork checking, or more likely, we are building off our head block
   try
   {
+    BOOST_SCOPE_EXIT( this_ ) { this_->clear_tx_status(); } BOOST_SCOPE_EXIT_END
+    set_tx_status( database::TX_STATUS_INC_BLOCK );
     auto session = start_undo_session();
     apply_block(new_block, skip);
     session.push();
@@ -1160,34 +1269,27 @@ bool database::_push_block(const signed_block& new_block)
   * queues full as well, it will be kept in the queue to be propagated later when a new block flushes out the pending
   * queues.
   */
-void database::push_transaction( const signed_transaction& trx, uint32_t skip )
+void database::push_transaction( const signed_transaction_transporter& trx, uint32_t skip )
 {
   try
   {
-    try
+    auto trx_size = fc::raw::pack_size( trx.trx );
+    //ABW: why is that limit related to block size and not HIVE_MAX_TRANSACTION_SIZE?
+    auto trx_size_limit = get_dynamic_global_properties().maximum_block_size - 256;
+    FC_ASSERT( trx_size <= trx_size_limit, "Transaction too large - size = ${s}, limit ${l}",
+      ( "s", trx_size )( "l", trx_size_limit ) );
+
+    detail::with_skip_flags( *this, skip, [&]()
     {
-      FC_ASSERT( fc::raw::pack_size(trx) <= (get_dynamic_global_properties().maximum_block_size - 256) );
-      set_producing( true );
-      set_pending_tx( true );
-      detail::with_skip_flags( *this, skip,
-        [&]()
-        {
-          _push_transaction( trx );
-        });
-      set_producing( false );
-      set_pending_tx( false );
-    }
-    catch( ... )
-    {
-      set_producing( false );
-      set_pending_tx( false );
-      throw;
-    }
+      BOOST_SCOPE_EXIT( this_ ) { this_->clear_tx_status(); } BOOST_SCOPE_EXIT_END
+      set_tx_status( TX_STATUS_UNVERIFIED );
+      _push_transaction( trx );
+    } );
   }
-  FC_CAPTURE_AND_RETHROW( (trx) )
+  FC_CAPTURE_AND_RETHROW( (trx.trx) )
 }
 
-void database::_push_transaction( const signed_transaction& trx )
+void database::_push_transaction( const signed_transaction_transporter& trx )
 {
   // If this is the first transaction pushed after applying a block, start a new undo session.
   // This allows us to quickly rewind to the clean state of the head block, in case a new block arrives.
@@ -1226,7 +1328,8 @@ void database::pop_block()
     _fork_db.pop_block();
     undo();
 
-    _popped_tx.insert( _popped_tx.begin(), head_block->transactions.begin(), head_block->transactions.end() );
+    for( auto& trx : head_block->transactions )
+      _popped_tx.insert( _popped_tx.begin(), trx );
 
   }
   FC_CAPTURE_AND_RETHROW()
@@ -1236,7 +1339,7 @@ void database::clear_pending()
 {
   try
   {
-    assert( (_pending_tx.size() == 0) || _pending_tx_session.valid() );
+    assert( _pending_tx.empty() || _pending_tx_session.valid() );
     _pending_tx.clear();
     _pending_tx_session.reset();
   }
@@ -1246,9 +1349,8 @@ void database::clear_pending()
 void database::push_virtual_operation( const operation& op )
 {
   FC_ASSERT( is_virtual_operation( op ) );
+  _current_op_in_trx++;
   operation_notification note = create_operation_notification( op );
-  ++_current_virtual_op;
-  note.virtual_op = _current_virtual_op;
   notify_pre_apply_operation( note );
   notify_post_apply_operation( note );
 }
@@ -1256,17 +1358,16 @@ void database::push_virtual_operation( const operation& op )
 void database::pre_push_virtual_operation( const operation& op )
 {
   FC_ASSERT( is_virtual_operation( op ) );
+  _current_op_in_trx++;
   operation_notification note = create_operation_notification( op );
-  ++_current_virtual_op;
-  note.virtual_op = _current_virtual_op;
   notify_pre_apply_operation( note );
 }
 
-void database::post_push_virtual_operation( const operation& op )
+void database::post_push_virtual_operation( const operation& op, const fc::optional<uint64_t>& op_in_trx )
 {
   FC_ASSERT( is_virtual_operation( op ) );
   operation_notification note = create_operation_notification( op );
-  note.virtual_op = _current_virtual_op;
+  if(op_in_trx.valid()) note.op_in_trx = *op_in_trx;
   notify_post_apply_operation( note );
 }
 
@@ -1361,6 +1462,11 @@ void database::notify_irreversible_block( uint32_t block_num )
   HIVE_TRY_NOTIFY( _on_irreversible_block, block_num )
 }
 
+void database::notify_switch_fork( uint32_t block_num )
+{
+  HIVE_TRY_NOTIFY( _switch_fork_signal, block_num )
+}
+
 void database::notify_post_apply_block( const block_notification& note )
 {
   HIVE_TRY_NOTIFY( _post_apply_block_signal, note )
@@ -1388,12 +1494,27 @@ void database::notify_prepare_snapshot_data_supplement(const prepare_snapshot_su
 
 void database::notify_load_snapshot_data_supplement(const load_snapshot_supplement_notification& note)
 {
-  HIVE_TRY_NOTIFY(_load_snapshot_supplement_signal, note) 
+  HIVE_TRY_NOTIFY(_load_snapshot_supplement_signal, note)
 }
 
 void database::notify_comment_reward(const comment_reward_notification& note)
 {
-  HIVE_TRY_NOTIFY(_comment_reward_signal, note) 
+  HIVE_TRY_NOTIFY(_comment_reward_signal, note)
+}
+
+void database::notify_end_of_syncing()
+{
+  HIVE_TRY_NOTIFY(_end_of_syncing_signal)
+}
+
+void database::notify_pre_apply_custom_operation( const custom_operation_notification& note )
+{
+  HIVE_TRY_NOTIFY( _pre_apply_custom_operation_signal, note )
+}
+
+void database::notify_post_apply_custom_operation( const custom_operation_notification& note )
+{
+  HIVE_TRY_NOTIFY( _post_apply_custom_operation_signal, note )
 }
 
 account_name_type database::get_scheduled_witness( uint32_t slot_num )const
@@ -1509,25 +1630,25 @@ asset calculate_vesting( database& db, const asset& liquid, bool to_reward_balan
   };
 
 #ifdef HIVE_ENABLE_SMT
-    if( liquid.symbol.space() == asset_symbol_type::smt_nai_space )
-    {
-      FC_ASSERT( liquid.symbol.is_vesting() == false );
-      // Get share price.
-      const auto& smt = db.get< smt_token_object, by_symbol >( liquid.symbol );
-      FC_ASSERT( smt.allow_voting == to_reward_balance, "No voting - no rewards" );
-      price vesting_share_price = to_reward_balance ? smt.get_reward_vesting_share_price() : smt.get_vesting_share_price();
-      // Calculate new vesting from provided liquid using share price.
-      return calculate_new_vesting( vesting_share_price );
-    }
-#endif
-
-    FC_ASSERT( liquid.symbol == HIVE_SYMBOL );
-    // ^ A novelty, needed but risky in case someone managed to slip HBD/TESTS here in blockchain history.
+  if( liquid.symbol.space() == asset_symbol_type::smt_nai_space )
+  {
+    FC_ASSERT( liquid.symbol.is_vesting() == false );
     // Get share price.
-    const auto& cprops = db.get_dynamic_global_properties();
-    price vesting_share_price = to_reward_balance ? cprops.get_reward_vesting_share_price() : cprops.get_vesting_share_price();
+    const auto& smt = db.get< smt_token_object, by_symbol >( liquid.symbol );
+    FC_ASSERT( smt.allow_voting == to_reward_balance, "No voting - no rewards" );
+    price vesting_share_price = to_reward_balance ? smt.get_reward_vesting_share_price() : smt.get_vesting_share_price();
     // Calculate new vesting from provided liquid using share price.
     return calculate_new_vesting( vesting_share_price );
+  }
+#endif
+
+  FC_ASSERT( liquid.symbol == HIVE_SYMBOL );
+  // ^ A novelty, needed but risky in case someone managed to slip HBD/TESTS here in blockchain history.
+  // Get share price.
+  const auto& cprops = db.get_dynamic_global_properties();
+  price vesting_share_price = to_reward_balance ? cprops.get_reward_vesting_share_price() : cprops.get_vesting_share_price();
+  // Calculate new vesting from provided liquid using share price.
+  return calculate_new_vesting( vesting_share_price );
 }
 
 asset database::adjust_account_vesting_balance(const account_object& to_account, const asset& liquid, bool to_reward_balance, Before&& before_vesting_callback )
@@ -1904,11 +2025,11 @@ void database::clear_null_account_balance()
 
 void database::consolidate_treasury_balance()
 {
-  if( !has_hardfork( HIVE_TREASURY_RENAME_HARDFORK ) )
+  if( !has_hardfork( HIVE_HARDFORK_1_24_TREASURY_RENAME ) )
     return;
 
   auto treasury_name = get_treasury_name();
-  auto old_treasury_name = get_treasury_name( HIVE_TREASURY_RENAME_HARDFORK - 1 );
+  auto old_treasury_name = get_treasury_name( HIVE_HARDFORK_1_24_TREASURY_RENAME - 1 );
 
   const auto& old_treasury_account = get_account( old_treasury_name );
   asset total_hive, total_hbd, total_vests, vesting_shares_hive_value;
@@ -2068,7 +2189,9 @@ void database::restore_accounts( const std::set< std::string >& restored_account
 
     if( found == hardforks.h23_balances.end() )
     {
-      ilog( "The account ${acc} hadn't removed balances, balances can't be restored", ( "acc", name ) );
+      #ifndef IS_TEST_NET
+        ilog( "The account ${acc} hadn't removed balances, balances can't be restored", ( "acc", name ) );
+      #endif
       continue;
     }
 
@@ -2109,26 +2232,19 @@ void database::clear_accounts( const std::set< std::string >& cleared_accounts )
     if( account_ptr == nullptr )
       continue;
 
-    asset total_transferred_hbd, total_transferred_hive, total_converted_vests, total_hive_from_vests;
-    clear_account( *account_ptr, &total_transferred_hbd, &total_transferred_hive, &total_converted_vests, &total_hive_from_vests );
-
-    gather_balance( account_name, total_transferred_hive, total_transferred_hbd );
-
-    operation vop = hardfork_hive_operation( account_name, treasury_name,
-      total_transferred_hbd, total_transferred_hive, total_converted_vests, total_hive_from_vests );
-    push_virtual_operation( vop );
+    clear_account( *account_ptr );
   }
 }
 
-void database::clear_account( const account_object& account,
-  asset* transferred_hbd_ptr, asset* transferred_hive_ptr,
-  asset* converted_vests_ptr, asset* hive_from_vests_ptr )
+void database::clear_account( const account_object& account )
 {
-  const auto& account_name = account.name;
+  const auto& account_name = account.get_name();
   FC_ASSERT( account_name != get_treasury_name(), "Can't clear treasury account" );
 
   const auto& treasury_account = get_treasury();
   const auto& cprops = get_dynamic_global_properties();
+
+  hardfork_hive_operation vop( account_name, treasury_account.get_name() );
 
   asset total_transferred_hive = asset( 0, HIVE_SYMBOL );
   asset total_transferred_hbd = asset( 0, HBD_SYMBOL );
@@ -2137,30 +2253,41 @@ void database::clear_account( const account_object& account,
 
   if( account.vesting_shares.amount > 0 )
   {
+    // Collect delegations and their delegatees to capture all affected accounts before delegations are deleted
+    std::vector< std::pair< const vesting_delegation_object&, const account_object& > > delegations;
+
+    const auto& delegation_idx = get_index< vesting_delegation_index, by_delegation >();
+    auto delegation_itr = delegation_idx.lower_bound( account.get_id() );
+    while( delegation_itr != delegation_idx.end() && delegation_itr->get_delegator() == account.get_id() )
+    {
+      delegations.emplace_back( *delegation_itr, get_account( delegation_itr->get_delegatee() ) );
+      vop.other_affected_accounts.emplace_back( delegations.back().second.get_name() );
+      ++delegation_itr;
+    }
+
+    // emit vop with other_affected_accounts filled but before any change happened on the accounts
+    pre_push_virtual_operation( vop );
+
     // Remove all delegations
     asset freed_delegations = asset( 0, VESTS_SYMBOL );
 
-    const auto& delegation_idx = get_index< vesting_delegation_index, by_delegation >();
-    auto delegation_itr = delegation_idx.lower_bound( account_name );
-    while( delegation_itr != delegation_idx.end() && delegation_itr->delegator == account_name )
+    for( auto& delegation_pair : delegations )
     {
-      auto& delegation = *delegation_itr;
-      ++delegation_itr;
-
-      const auto& delegatee = get_account( delegation.delegatee );
+      const auto& delegation = delegation_pair.first;
+      const auto& delegatee = delegation_pair.second;
 
       modify( delegatee, [&]( account_object& a )
       {
         util::update_manabar( cprops, a, true, true );
-        a.received_vesting_shares -= delegation.vesting_shares;
-        freed_delegations += delegation.vesting_shares;
+        a.received_vesting_shares -= delegation.get_vesting();
+        freed_delegations += delegation.get_vesting();
 
-        a.voting_manabar.use_mana( delegation.vesting_shares.amount.value );
+        a.voting_manabar.use_mana( delegation.get_vesting().amount.value );
         if( a.voting_manabar.current_mana < 0 )
           a.voting_manabar.current_mana = 0;
 
         a.downvote_manabar.use_mana(
-          ((uint128_t(delegation.vesting_shares.amount.value) * cprops.downvote_pool_percent) /
+          ((uint128_t(delegation.get_vesting().amount.value) * cprops.downvote_pool_percent) /
           HIVE_100_PERCENT).to_int64());
         if( a.downvote_manabar.current_mana < 0 )
           a.downvote_manabar.current_mana = 0;
@@ -2171,13 +2298,13 @@ void database::clear_account( const account_object& account,
 
     // Remove pending expired delegations
     const auto& exp_delegation_idx = get_index< vesting_delegation_expiration_index, by_account_expiration >();
-    auto exp_delegation_itr = exp_delegation_idx.lower_bound( account_name );
-    while( exp_delegation_itr != exp_delegation_idx.end() && exp_delegation_itr->delegator == account_name )
+    auto exp_delegation_itr = exp_delegation_idx.lower_bound( account.get_id() );
+    while( exp_delegation_itr != exp_delegation_idx.end() && exp_delegation_itr->get_delegator() == account.get_id() )
     {
       auto& delegation = *exp_delegation_itr;
       ++exp_delegation_itr;
 
-      freed_delegations += delegation.vesting_shares;
+      freed_delegations += delegation.get_vesting();
       remove( delegation );
     }
 
@@ -2214,6 +2341,11 @@ void database::clear_account( const account_object& account,
       o.total_vesting_fund_hive -= converted_hive;
       o.total_vesting_shares -= vests_to_convert;
     } );
+  }
+  else
+  {
+    // just emit empty vop, since there was nothing to fill it with so far
+    pre_push_virtual_operation( vop );
   }
 
   // Remove pending escrows (return balance to account - compare with expire_escrow_ratification())
@@ -2300,7 +2432,7 @@ void database::clear_account( const account_object& account,
     remove( withdrawal );
   }
 
-  // Touch SDB balances (to be sure all interests are added to balances)
+  // Touch HBD balances (to be sure all interests are added to balances)
   if( has_hardfork( HIVE_HARDFORK_1_24 ) )
   {
     adjust_balance( account, asset( 0, HBD_SYMBOL ) );
@@ -2349,14 +2481,14 @@ void database::clear_account( const account_object& account,
     a.reward_vesting_hive = asset( 0, HIVE_SYMBOL );
   } );
 
-  if( transferred_hbd_ptr != nullptr )
-    *transferred_hbd_ptr = total_transferred_hbd;
-  if( transferred_hive_ptr != nullptr )
-    *transferred_hive_ptr = total_transferred_hive;
-  if( converted_vests_ptr != nullptr )
-    *converted_vests_ptr = total_converted_vests;
-  if( hive_from_vests_ptr != nullptr )
-    *hive_from_vests_ptr = total_hive_from_vests;
+  vop.hbd_transferred = total_transferred_hbd;
+  vop.hive_transferred = total_transferred_hive;
+  vop.vests_converted = total_converted_vests;
+  vop.total_hive_from_vests = total_hive_from_vests;
+
+  gather_balance( account_name, vop.hive_transferred, vop.hbd_transferred );
+
+  post_push_virtual_operation( vop );
 }
 
 void database::process_proposals( const block_notification& note )
@@ -2392,14 +2524,15 @@ void database::process_recurrent_transfers()
 
   // uint16_t is okay because we stop at 1000, if the limit changes, make sure to check if it fits in the integer.
   uint16_t processed_transfers = 0;
-
+  if( _benchmark_dumper.is_enabled() )
+    _benchmark_dumper.begin();
   while( itr != recurrent_transfers_by_date.end() && itr->get_trigger_date() <= now )
   {
     // Since this is an intensive process, we don't want to process too many recurrent transfers in a single block
     if (processed_transfers >= HIVE_MAX_RECURRENT_TRANSFERS_PER_BLOCK)
     {
       ilog("Reached max processed recurrent transfers this block");
-      return;
+      break;
     }
 
     auto &current_recurrent_transfer = *itr;
@@ -2479,6 +2612,8 @@ void database::process_recurrent_transfers()
 
     processed_transfers++;
   }
+  if( _benchmark_dumper.is_enabled() && processed_transfers )
+    _benchmark_dumper.end( "processing", "hive::protocol::recurrent_transfer_operation", processed_transfers );
 }
 
 /**
@@ -2488,7 +2623,6 @@ void database::process_recurrent_transfers()
   */
 void database::adjust_rshares2( fc::uint128_t old_rshares2, fc::uint128_t new_rshares2 )
 {
-
   const auto& dgpo = get_dynamic_global_properties();
   modify( dgpo, [&]( dynamic_global_property_object& p )
   {
@@ -2507,6 +2641,7 @@ void database::update_owner_authority( const account_object& account, const auth
   modify( get< account_authority_object, by_account >( account.name ), [&]( account_authority_object& auth )
   {
     auth.owner = owner_authority;
+    auth.previous_owner_update = auth.last_owner_update;
     auth.last_owner_update = head_block_time();
   });
 }
@@ -2519,9 +2654,12 @@ void database::process_vesting_withdrawals()
 
   const auto& cprops = get_dynamic_global_properties();
 
+  int count = 0;
+  if( _benchmark_dumper.is_enabled() )
+    _benchmark_dumper.begin();
   while( current != widx.end() && current->next_vesting_withdrawal <= head_block_time() )
   {
-    const auto& from_account = *current; ++current;
+    const auto& from_account = *current; ++current; ++count;
 
     /**
     *  Let T = total tokens in vesting fund
@@ -2565,7 +2703,6 @@ void database::process_vesting_withdrawals()
 
             asset vests = asset( to_deposit, VESTS_SYMBOL );
             asset routed = auto_vest_mode ? vests : ( vests * cprops.get_vesting_share_price() );
-
             operation vop = fill_vesting_withdraw_operation( from_account.name, to_account.name, vests, routed );
 
             pre_push_virtual_operation( vop );
@@ -2672,18 +2809,8 @@ void database::process_vesting_withdrawals()
 
     post_push_virtual_operation( vop );
   }
-}
-
-void database::adjust_total_payout( const comment_cashout_object& cur, const asset& hbd_created, const asset& curator_hbd_value, const asset& beneficiary_value )
-{
-  modify( cur, [&]( comment_cashout_object& c )
-  {
-    // input assets should be in HBD
-    c.total_payout_value += hbd_created;
-    c.curator_payout_value += curator_hbd_value;
-    c.beneficiary_payout_value += beneficiary_value;
-  } );
-  /// TODO: potentially modify author's total payout numbers as well
+  if( _benchmark_dumper.is_enabled() && count )
+    _benchmark_dumper.end( "processing", "hive::protocol::withdraw_vesting_operation", count );
 }
 
 /**
@@ -2698,46 +2825,46 @@ share_type database::pay_curators( const comment_object& comment, const comment_
   {
     bool operator()( const comment_vote_object* obj, const comment_vote_object* obj2 ) const
     {
-      if( obj->weight == obj2->weight )
-        return obj->voter < obj2->voter;
+      if( obj->get_weight() == obj2->get_weight() )
+        return obj->get_voter() < obj2->get_voter();
       else
-        return obj->weight > obj2->weight;
+        return obj->get_weight() > obj2->get_weight();
     }
   };
 
   try
   {
-    uint128_t total_weight( comment_cashout.total_vote_weight );
-    //edump( (total_weight)(max_rewards) );
     share_type unclaimed_rewards = max_rewards;
 
-    if( !comment_cashout.allow_curation_rewards )
+    if( !comment_cashout.allows_curation_rewards() )
     {
       unclaimed_rewards = 0;
       max_rewards = 0;
     }
-    else if( comment_cashout.total_vote_weight > 0 )
+    else if( comment_cashout.get_total_vote_weight() > 0 )
     {
-      const auto& cvidx = get_index<comment_vote_index>().indices().get<by_comment_voter>();
+      uint128_t total_weight( comment_cashout.get_total_vote_weight() );
+
+      const auto& cvidx = get_index<comment_vote_index, by_comment_voter>();
       auto itr = cvidx.lower_bound( comment.get_id() );
 
       std::set< const comment_vote_object*, cmp > proxy_set;
-      while( itr != cvidx.end() && itr->comment == comment.get_id() )
+      while( itr != cvidx.end() && itr->get_comment() == comment.get_id() )
       {
         proxy_set.insert( &( *itr ) );
         ++itr;
       }
 
-      const auto& comment_author_name = get_account( comment_cashout.author_id ).name;
+      const auto& comment_author_name = get_account( comment_cashout.get_author_id() ).name;
       for( auto& item : proxy_set )
       { try {
-        uint128_t weight( item->weight );
+        uint128_t weight( item->get_weight() );
         auto claim = ( ( max_rewards.value * weight ) / total_weight ).to_uint64();
         if( claim > 0 ) // min_amt is non-zero satoshis
         {
           unclaimed_rewards -= claim;
-          const auto& voter = get( item->voter );
-          operation vop = curation_reward_operation( voter.name, asset(0, VESTS_SYMBOL), comment_author_name, to_string( comment_cashout.permlink ), has_hardfork( HIVE_HARDFORK_0_17__659 ) );
+          const auto& voter = get( item->get_voter() );
+          operation vop = curation_reward_operation( voter.name, asset(0, VESTS_SYMBOL), comment_author_name, to_string( comment_cashout.get_permlink() ), has_hardfork( HIVE_HARDFORK_0_17__659 ) );
           create_vesting2( *this, voter, asset( claim, HIVE_SYMBOL ), has_hardfork( HIVE_HARDFORK_0_17__659 ),
             [&]( const asset& reward )
             {
@@ -2759,22 +2886,21 @@ share_type database::pay_curators( const comment_object& comment, const comment_
   } FC_CAPTURE_AND_RETHROW( (max_rewards) )
 }
 
-void fill_comment_reward_context_local_state( util::comment_reward_context& ctx, const comment_cashout_object& comment_cashout )
-{
-  ctx.rshares = comment_cashout.net_rshares;
-  ctx.reward_weight = comment_cashout.reward_weight;
-  ctx.max_hbd = comment_cashout.max_accepted_payout;
-}
-
-share_type database::cashout_comment_helper( util::comment_reward_context& ctx, const comment_object& comment, const comment_cashout_object& comment_cashout, bool forward_curation_remainder )
+share_type database::cashout_comment_helper( util::comment_reward_context& ctx, const comment_object& comment,
+  const comment_cashout_object& comment_cashout, const comment_cashout_ex_object* comment_cashout_ex, bool forward_curation_remainder )
 {
   try
   {
     share_type claimed_reward = 0;
 
-    if( comment_cashout.net_rshares > 0 )
+    if( comment_cashout.get_net_rshares() > 0 )
     {
-      fill_comment_reward_context_local_state( ctx, comment_cashout );
+      ctx.rshares = comment_cashout.get_net_rshares();
+      ctx.max_hbd = comment_cashout.get_max_accepted_payout();
+      if( comment_cashout_ex )
+        ctx.reward_weight = comment_cashout_ex->get_reward_weight();
+      else
+        ctx.reward_weight = HIVE_100_PERCENT;
 
       if( has_hardfork( HIVE_HARDFORK_0_17__774 ) )
       {
@@ -2800,16 +2926,18 @@ share_type database::cashout_comment_helper( util::comment_reward_context& ctx, 
 
         share_type total_beneficiary = 0;
         claimed_reward = author_tokens + curation_tokens;
-        const auto& author = get_account( comment_cashout.author_id );
+        const auto& author = get_account( comment_cashout.get_author_id() );
         const auto& comment_author = author.name;
 
-        for( auto& b : comment_cashout.beneficiaries )
+        for( auto& b : comment_cashout.get_beneficiaries() )
         {
+          const auto& beneficiary = get_account( b.account_id );
+
           auto benefactor_tokens = ( author_tokens * b.weight ) / HIVE_100_PERCENT;
           auto benefactor_vesting_hive = benefactor_tokens;
-          auto vop = comment_benefactor_reward_operation( b.account, comment_author, to_string( comment_cashout.permlink ), asset( 0, HBD_SYMBOL ), asset( 0, HIVE_SYMBOL ), asset( 0, VESTS_SYMBOL ) );
+          auto vop = comment_benefactor_reward_operation( beneficiary.get_name(), comment_author, to_string( comment_cashout.get_permlink() ), asset( 0, HBD_SYMBOL ), asset( 0, HIVE_SYMBOL ), asset( 0, VESTS_SYMBOL ) );
 
-          if( has_hardfork( HIVE_HARDFORK_0_21__3343 ) && is_treasury( b.account ) )
+          if( has_hardfork( HIVE_HARDFORK_0_21__3343 ) && is_treasury( beneficiary.get_name() ) )
           {
             benefactor_vesting_hive = 0;
             vop.hbd_payout = asset( benefactor_tokens, HIVE_SYMBOL ) * get_feed_history().current_median_history;
@@ -2819,15 +2947,15 @@ share_type database::cashout_comment_helper( util::comment_reward_context& ctx, 
           }
           else if( has_hardfork( HIVE_HARDFORK_0_20__2022 ) )
           {
-            auto benefactor_hbd_hive = ( benefactor_tokens * comment_cashout.percent_hbd ) / ( 2 * HIVE_100_PERCENT ) ;
+            auto benefactor_hbd_hive = ( benefactor_tokens * comment_cashout.get_percent_hbd() ) / ( 2 * HIVE_100_PERCENT ) ;
             benefactor_vesting_hive  = benefactor_tokens - benefactor_hbd_hive;
-            auto hbd_payout          = create_hbd( get_account( b.account ), asset( benefactor_hbd_hive, HIVE_SYMBOL ), true );
+            auto hbd_payout          = create_hbd( beneficiary, asset( benefactor_hbd_hive, HIVE_SYMBOL ), true );
 
             vop.hbd_payout   = hbd_payout.first; // HBD portion
             vop.hive_payout = hbd_payout.second; // HIVE portion
           }
 
-          create_vesting2( *this, get_account( b.account ), asset( benefactor_vesting_hive, HIVE_SYMBOL ), has_hardfork( HIVE_HARDFORK_0_17__659 ),
+          create_vesting2( *this, beneficiary, asset( benefactor_vesting_hive, HIVE_SYMBOL ), has_hardfork( HIVE_HARDFORK_0_17__659 ),
           [&]( const asset& reward )
           {
             vop.vesting_payout = reward;
@@ -2840,7 +2968,7 @@ share_type database::cashout_comment_helper( util::comment_reward_context& ctx, 
 
         author_tokens -= total_beneficiary;
 
-        auto hbd_hive     = ( author_tokens * comment_cashout.percent_hbd ) / ( 2 * HIVE_100_PERCENT ) ;
+        auto hbd_hive     = ( author_tokens * comment_cashout.get_percent_hbd() ) / ( 2 * HIVE_100_PERCENT ) ;
         auto vesting_hive = author_tokens - hbd_hive;
 
         auto hbd_payout = create_hbd( author, asset( hbd_hive, HIVE_SYMBOL ), has_hardfork( HIVE_HARDFORK_0_17__659 ) );
@@ -2851,7 +2979,7 @@ share_type database::cashout_comment_helper( util::comment_reward_context& ctx, 
         */
         auto curators_vesting_payout = calculate_vesting( *this, asset( curation_tokens, HIVE_SYMBOL ), has_hardfork( HIVE_HARDFORK_0_17__659 ) );
 
-        operation vop = author_reward_operation( comment_author, to_string( comment_cashout.permlink ), hbd_payout.first, hbd_payout.second, asset( 0, VESTS_SYMBOL ),
+        operation vop = author_reward_operation( comment_author, to_string( comment_cashout.get_permlink() ), hbd_payout.first, hbd_payout.second, asset( 0, VESTS_SYMBOL ),
                                                 curators_vesting_payout, has_hardfork( HIVE_HARDFORK_0_17__659 ) );
 
         create_vesting2( *this, author, asset( vesting_hive, HIVE_SYMBOL ), has_hardfork( HIVE_HARDFORK_0_17__659 ),
@@ -2860,84 +2988,80 @@ share_type database::cashout_comment_helper( util::comment_reward_context& ctx, 
             vop.get< author_reward_operation >().vesting_payout = vesting_payout;
             pre_push_virtual_operation( vop );
           } );
-
-        adjust_total_payout( comment_cashout, hbd_payout.first + to_hbd( hbd_payout.second + asset( vesting_hive, HIVE_SYMBOL ) ), to_hbd( asset( curation_tokens, HIVE_SYMBOL ) ), to_hbd( asset( total_beneficiary, HIVE_SYMBOL ) ) );
-
         post_push_virtual_operation( vop );
-        vop = comment_reward_operation( comment_author, to_string( comment_cashout.permlink ), to_hbd( asset( claimed_reward, HIVE_SYMBOL ) ), author_tokens,
-                                        comment_cashout.total_payout_value, comment_cashout.curator_payout_value, comment_cashout.beneficiary_payout_value
-        );
+
+        asset payout = hbd_payout.first + to_hbd( hbd_payout.second + asset( vesting_hive, HIVE_SYMBOL ) );
+        asset curator_payout = to_hbd( asset( curation_tokens, HIVE_SYMBOL ) );
+        asset beneficiary_payout = to_hbd( asset( total_beneficiary, HIVE_SYMBOL ) );
+        if( !has_hardfork( HIVE_HARDFORK_0_19 ) )
+        {
+          modify( *comment_cashout_ex, [&]( comment_cashout_ex_object& c_ex )
+          {
+            c_ex.add_payout_values( payout, curator_payout, beneficiary_payout );
+            payout = c_ex.get_total_payout();
+            curator_payout = c_ex.get_curator_payout();
+            beneficiary_payout = c_ex.get_beneficiary_payout();
+          } );
+        }
+        vop = comment_reward_operation( comment_author, to_string( comment_cashout.get_permlink() ),
+          to_hbd( asset( claimed_reward, HIVE_SYMBOL ) ), author_tokens, payout, curator_payout, beneficiary_payout );
         pre_push_virtual_operation( vop );
         post_push_virtual_operation( vop );
 
-          modify( comment_cashout, [&]( comment_cashout_object& c )
-          {
-            c.author_rewards += author_tokens;
-          });
-
-          modify( author, [&]( account_object& a )
-          {
-            a.posting_rewards += author_tokens;
-          });
+        modify( author, [&]( account_object& a )
+        {
+          a.posting_rewards += author_tokens;
+        });
       }
 
       notify_comment_reward( { reward, author_tokens, curation_tokens } );
 
       if( !has_hardfork( HIVE_HARDFORK_0_17__774 ) )
-        adjust_rshares2( util::evaluate_reward_curve( comment_cashout.net_rshares.value ), 0 );
+        adjust_rshares2( util::evaluate_reward_curve( comment_cashout.get_net_rshares() ), 0 );
     }
 
-    modify( comment_cashout, [&]( comment_cashout_object& c )
+    if( !has_hardfork( HIVE_HARDFORK_0_19 ) ) // paid comment is removed after HF19, so no point in modification
     {
-      /**
-      * A payout is only made for positive rshares, negative rshares hang around
-      * for the next time this post might get an upvote.
-      */
-      if( c.net_rshares > 0 )
-        c.net_rshares = 0;
-      c.children_abs_rshares = 0;
-      c.abs_rshares  = 0;
-      c.vote_rshares = 0;
-      c.total_vote_weight = 0;
-      c.max_cashout_time = fc::time_point_sec::maximum();
-
-      if( has_hardfork( HIVE_HARDFORK_0_17__769 ) )
+      modify( comment_cashout, [&]( comment_cashout_object& c )
       {
-        c.cashout_time = fc::time_point_sec::maximum();
-      }
-      else if( comment.is_root() )
+        /**
+        * A payout is only made for positive rshares, negative rshares hang around
+        * for the next time this post might get an upvote.
+        */
+        int64_t negative_rshares = c.get_net_rshares() < 0 ? c.get_net_rshares() : 0;
+        c.on_payout();
+        c.accumulate_vote_rshares( negative_rshares, 0 );
+
+        if( has_hardfork( HIVE_HARDFORK_0_17__769 ) )
+        {
+          c.set_cashout_time();
+        }
+        else if( comment.is_root() )
+        {
+          if( has_hardfork( HIVE_HARDFORK_0_12__177 ) && !comment_cashout_ex->was_paid() )
+            c.set_cashout_time( head_block_time() + HIVE_SECOND_CASHOUT_WINDOW );
+          else
+            c.set_cashout_time();
+        }
+      } );
+      modify( *comment_cashout_ex, [&]( comment_cashout_ex_object& c_ex )
       {
-        if( has_hardfork( HIVE_HARDFORK_0_12__177 ) && c.last_payout == fc::time_point_sec::min() )
-          c.cashout_time = head_block_time() + HIVE_SECOND_CASHOUT_WINDOW;
-        else
-          c.cashout_time = fc::time_point_sec::maximum();
-      }
-
-      c.last_payout = head_block_time();
-    } );
-
-    if( calculate_discussion_payout_time( comment_cashout ) == fc::time_point_sec::maximum() )
-    {
-      push_virtual_operation( comment_payout_update_operation( get_account(comment_cashout.author_id).name, to_string( comment_cashout.permlink ) ) );
+        c_ex.on_payout( head_block_time() );
+      } );
     }
 
-    const auto& vote_idx = get_index< comment_vote_index >().indices().get< by_comment_voter >();
+    if( has_hardfork( HIVE_HARDFORK_0_17__769 ) || calculate_discussion_payout_time( comment, comment_cashout ) == fc::time_point_sec::maximum() )
+    {
+      push_virtual_operation( comment_payout_update_operation( get_account( comment_cashout.get_author_id() ).name, to_string( comment_cashout.get_permlink() ) ) );
+    }
+
+    const auto& vote_idx = get_index< comment_vote_index, by_comment_voter >();
     auto vote_itr = vote_idx.lower_bound( comment.get_id() );
-    while( vote_itr != vote_idx.end() && vote_itr->comment == comment.get_id() )
+    while( vote_itr != vote_idx.end() && vote_itr->get_comment() == comment.get_id() )
     {
       const auto& cur_vote = *vote_itr;
       ++vote_itr;
-      if( !has_hardfork( HIVE_HARDFORK_0_12__177 ) || calculate_discussion_payout_time( comment_cashout ) != fc::time_point_sec::maximum() )
-      {
-        modify( cur_vote, [&]( comment_vote_object& cvo )
-        {
-          cvo.num_changes = -1;
-        });
-      }
-      else
-      {
-        remove( cur_vote );
-      }
+      remove( cur_vote );
     }
 
     return claimed_reward;
@@ -2953,6 +3077,7 @@ void database::process_comment_cashout()
     return;
 
   const auto& gpo = get_dynamic_global_properties();
+  auto _now = head_block_time();
   util::comment_reward_context ctx;
   ctx.current_hive_price = get_feed_history().current_median_history;
 
@@ -2973,8 +3098,11 @@ void database::process_comment_cashout()
       else
         decay_time = HIVE_RECENT_RSHARES_DECAY_TIME_HF17;
 
-      rfo.recent_claims -= ( rfo.recent_claims * ( head_block_time() - rfo.last_update ).to_seconds() ) / decay_time.to_seconds();
-      rfo.last_update = head_block_time();
+      if( ( _now - rfo.last_update ) <= decay_time || !has_hardfork( HIVE_HARDFORK_1_26_CLAIM_UNDERFLOW ) ) //TODO: remove hardfork part after HF26
+        rfo.recent_claims -= ( rfo.recent_claims * ( _now - rfo.last_update ).to_seconds() ) / decay_time.to_seconds();
+      else
+        rfo.recent_claims = 0; // this should never happen - requires chain to be inactive for more than decay_time
+      rfo.last_update = _now;
     });
 
     reward_fund_context rf_ctx;
@@ -2987,27 +3115,28 @@ void database::process_comment_cashout()
     funds.push_back( rf_ctx );
   }
 
-  const auto& cidx        = get_index< comment_cashout_index >().indices().get< by_cashout_time >();
-  const auto& com_by_root = get_index< comment_index >().indices().get< by_root >();
+  const auto& cidx        = get_index< comment_cashout_index, by_cashout_time >();
+  const auto& com_by_root = get_index< comment_cashout_ex_index, by_root >();
 
-  auto current = cidx.begin();
-  //  add all rshares about to be cashed out to the reward funds. This ensures equal satoshi per rshare payment
+  auto _current = cidx.begin();
+  // add all rshares about to be cashed out to the reward funds. This ensures equal satoshi per rshare payment
   if( has_hardfork( HIVE_HARDFORK_0_17__771 ) )
   {
-    while( current != cidx.end() && current->cashout_time <= head_block_time() )
+    while( _current != cidx.end() && _current->get_cashout_time() <= _now )
     {
-      if( current->net_rshares > 0 )
+      if( _current->get_net_rshares() > 0 )
       {
         const auto& rf = get_reward_fund();
-        funds[ rf.get_id() ].recent_claims += util::evaluate_reward_curve( current->net_rshares.value, rf.author_reward_curve, rf.content_constant );
+        funds[ rf.get_id() ].recent_claims += util::evaluate_reward_curve( _current->get_net_rshares(), rf.author_reward_curve, rf.content_constant );
       }
 
-      ++current;
+      ++_current;
     }
 
-    current = cidx.begin();
+    _current = cidx.begin();
   }
 
+  bool forward_curation_remainder = !has_hardfork( HIVE_HARDFORK_0_20__1877 );
   /*
     * Payout all comments
     *
@@ -3021,32 +3150,37 @@ void database::process_comment_cashout()
     * the global state updated each payout. After the hardfork, each payout is done
     * against a reward fund state that is snapshotted before all payouts in the block.
     */
-  while( current != cidx.end() && current->cashout_time <= head_block_time() )
+  int count = 0;
+  if( _benchmark_dumper.is_enabled() )
+    _benchmark_dumper.begin();
+  while( _current != cidx.end() && _current->get_cashout_time() <= _now )
   {
-    const comment_object& _comment = get_comment( *current );
-
     if( has_hardfork( HIVE_HARDFORK_0_17__771 ) )
     {
       auto fund_id = get_reward_fund().get_id();
       ctx.total_reward_shares2 = funds[ fund_id ].recent_claims;
       ctx.total_reward_fund_hive = funds[ fund_id ].reward_balance;
 
-      bool forward_curation_remainder = !has_hardfork( HIVE_HARDFORK_0_20__1877 );
-
-      funds[ fund_id ].hive_awarded += cashout_comment_helper( ctx, _comment, *current, forward_curation_remainder );
+      const comment_object& _comment = get_comment( *_current );
+      funds[ fund_id ].hive_awarded += cashout_comment_helper( ctx, _comment, *_current,
+        find_comment_cashout_ex( _comment ), forward_curation_remainder );
+      ++count;
     }
     else
     {
-      auto itr = com_by_root.lower_bound( _comment.get_root_id() );
-      while( itr != com_by_root.end() && itr->get_root_id() == _comment.get_root_id() )
+      comment_id_type root_id = find_comment_cashout_ex( _current->get_comment_id() )->get_root_id();
+      auto itr = com_by_root.lower_bound( root_id );
+      while( itr != com_by_root.end() && itr->get_root_id() == root_id )
       {
-        const auto& comment = *itr; ++itr;
+        const auto& comment_cashout_ex = *itr; ++itr;
         ctx.total_reward_shares2 = gpo.total_reward_shares2;
         ctx.total_reward_fund_hive = gpo.get_total_reward_fund_hive();
 
-        const comment_cashout_object* current = find_comment_cashout( comment );
-        FC_ASSERT( current );
-        auto reward = cashout_comment_helper( ctx, comment, *current );
+        const comment_object& comment = get_comment( comment_cashout_ex.get_comment_id() );
+        const comment_cashout_object* comment_cashout = find_comment_cashout( comment_cashout_ex.get_comment_id() );
+        FC_ASSERT( comment_cashout );
+        auto reward = cashout_comment_helper( ctx, comment, *comment_cashout, &comment_cashout_ex );
+        ++count;
 
         if( reward > 0 )
         {
@@ -3058,14 +3192,12 @@ void database::process_comment_cashout()
       }
     }
 
-    if( has_hardfork( HIVE_HARDFORK_0_19__876 ) )
-    {
-      if( current->cashout_time == fc::time_point_sec::maximum() )
-        remove( *current );
-    }
-
-    current = cidx.begin();
+    if( has_hardfork( HIVE_HARDFORK_0_19 ) )
+      remove( *_current );
+    _current = cidx.begin();
   }
+  if( _benchmark_dumper.is_enabled() && count )
+    _benchmark_dumper.end( "processing", "hive::protocol::comment_operation", count );
 
   // Write the cached fund state back to the database
   if( funds.size() )
@@ -3193,7 +3325,12 @@ void database::process_savings_withdraws()
 {
   const auto& idx = get_index< savings_withdraw_index >().indices().get< by_complete_from_rid >();
   auto itr = idx.begin();
-  while( itr != idx.end() ) {
+
+  int count = 0;
+  if( _benchmark_dumper.is_enabled() )
+    _benchmark_dumper.begin();
+  while( itr != idx.end() )
+  {
     if( itr->complete > head_block_time() )
       break;
     adjust_balance( get_account( itr->to ), itr->amount );
@@ -3207,7 +3344,10 @@ void database::process_savings_withdraws()
 
     remove( *itr );
     itr = idx.begin();
+    ++count;
   }
+  if( _benchmark_dumper.is_enabled() && count )
+    _benchmark_dumper.end( "processing", "hive::protocol::transfer_from_savings_operation", count );
 }
 
 void database::process_subsidized_accounts()
@@ -3393,6 +3533,9 @@ void database::process_conversions()
   asset net_hive( 0, HIVE_SYMBOL );
 
   //regular requests
+  int count = 0;
+  if( _benchmark_dumper.is_enabled() )
+    _benchmark_dumper.begin();
   {
     const auto& request_by_date = get_index< convert_request_index, by_conversion_date >();
     auto itr = request_by_date.begin();
@@ -3412,10 +3555,17 @@ void database::process_conversions()
 
       remove( *itr );
       itr = request_by_date.begin();
+
+      ++count;
     }
   }
+  if( _benchmark_dumper.is_enabled() && count )
+    _benchmark_dumper.end( "processing", "hive::protocol::convert_operation", count );
 
   //collateralized requests
+  count = 0;
+  if( _benchmark_dumper.is_enabled() )
+    _benchmark_dumper.begin();
   {
     const auto& request_by_date = get_index< collateralized_convert_request_index, by_conversion_date >();
     auto itr = request_by_date.begin();
@@ -3454,7 +3604,11 @@ void database::process_conversions()
 
       remove( *itr );
       itr = request_by_date.begin();
+
+      ++count;
     }
+    if( _benchmark_dumper.is_enabled() && count )
+      _benchmark_dumper.end( "processing", "hive::protocol::collateralized_convert_operation", count );
   }
 
   //correct global supply (if needed)
@@ -3551,6 +3705,9 @@ void database::process_decline_voting_rights()
   const auto& request_idx = get_index< decline_voting_rights_request_index >().indices().get< by_effective_date >();
   auto itr = request_idx.begin();
 
+  int count = 0;
+  if( _benchmark_dumper.is_enabled() )
+    _benchmark_dumper.begin();
   while( itr != request_idx.end() && itr->effective_date <= head_block_time() )
   {
     const auto& account = get< account_object, by_name >( itr->account );
@@ -3566,7 +3723,10 @@ void database::process_decline_voting_rights()
 
     remove( *itr );
     itr = request_idx.begin();
+    ++count;
   }
+  if( _benchmark_dumper.is_enabled() && count )
+    _benchmark_dumper.end( "processing", "hive::protocol::decline_voting_rights_operation", count );
 }
 
 time_point_sec database::head_block_time()const
@@ -3584,6 +3744,24 @@ block_id_type database::head_block_id()const
   return get_dynamic_global_properties().head_block_id;
 }
 
+//safe to call without chainbase lock
+time_point_sec database::head_block_time_from_fork_db(fc::microseconds wait_for_microseconds)const
+{
+  return _fork_db.head_block_time(wait_for_microseconds);
+}
+
+//safe to call without chainbase lock
+uint32_t database::head_block_num_from_fork_db(fc::microseconds wait_for_microseconds)const
+{
+  return _fork_db.head_block_num(wait_for_microseconds);
+}
+
+//safe to call without chainbase lock
+block_id_type database::head_block_id_from_fork_db(fc::microseconds wait_for_microseconds)const
+{
+  return _fork_db.head_block_id(wait_for_microseconds);
+}
+
 node_property_object& database::node_properties()
 {
   return _node_property_object;
@@ -3598,12 +3776,12 @@ uint32_t database::get_last_irreversible_block_num() const
 
 void database::set_last_irreversible_block_num(uint32_t block_num)
 {
-  //ilog("setting last_irreversible_block_num previous ${l}", ("l", irreversible_object->last_irreversible_block_num));
+  //dlog("setting last_irreversible_block_num previous ${l}", ("l", irreversible_object->last_irreversible_block_num));
   FC_ASSERT(block_num >= irreversible_object->last_irreversible_block_num, "Irreversible block can only move forward. Old: ${o}, new: ${n}",
     ("o", irreversible_object->last_irreversible_block_num)("n", block_num));
 
   irreversible_object->last_irreversible_block_num = block_num;
-  //ilog("setting last_irreversible_block_num new ${l}", ("l", irreversible_object->last_irreversible_block_num));
+  //dlog("setting last_irreversible_block_num new ${l}", ("l", irreversible_object->last_irreversible_block_num));
 }
 
 void database::initialize_evaluators()
@@ -3974,7 +4152,7 @@ void database::apply_block( const signed_block& next_block, uint32_t skip )
   /*try
   {
   /// check invariants
-  if( is_producing() || !( skip & skip_validate_invariants ) )
+  if( is_in_control() || !( skip & skip_validate_invariants ) )
     validate_invariants();
   }
   FC_CAPTURE_AND_RETHROW( (next_block) );*/
@@ -4070,10 +4248,11 @@ void database::_apply_block( const signed_block& next_block )
 
   _current_block_num    = next_block_num;
   _current_trx_in_block = 0;
-  _current_virtual_op   = 0;
 
   if( BOOST_UNLIKELY( next_block_num == 1 ) )
   {
+    process_genesis_accounts();
+
     // For every existing before the head_block_time (genesis time), apply the hardfork
     // This allows the test net to launch with past hardforks and apply the next harfork when running
 
@@ -4111,6 +4290,9 @@ void database::_apply_block( const signed_block& next_block )
 
   if( !( skip & skip_merkle_check ) )
   {
+    if( _benchmark_dumper.is_enabled() )
+      _benchmark_dumper.begin();
+
     auto merkle_root = next_block.calculate_merkle_root();
 
     try
@@ -4125,6 +4307,9 @@ void database::_apply_block( const signed_block& next_block )
       if( itr == merkle_map.end() || itr->second != merkle_root )
         throw e;
     }
+
+    if( _benchmark_dumper.is_enabled() )
+      _benchmark_dumper.end( "block", "merkle check" );
   }
 
   const witness_object& signing_witness = validate_block_header(skip, next_block);
@@ -4178,7 +4363,6 @@ void database::_apply_block( const signed_block& next_block )
 
   _current_trx_in_block = -1;
   _current_op_in_trx = 0;
-  _current_virtual_op = 0;
 
   update_global_dynamic_data(next_block);
   update_signing_witness(signing_witness, next_block);
@@ -4307,6 +4491,34 @@ void database::process_header_extensions( const signed_block& next_block, requir
     e.visit( _v );
 }
 
+void database::process_genesis_accounts()
+{
+  /*
+    This method is evaluated after processing all transactions,
+    so parameters of vop notification (trx_in_block = -1)
+    matches system pattern (vops generated by chain).
+
+    Calling this method before processing transaction makes
+    notifications simillar to theese produced by normal operations,
+    which is invalid, because there is no such operation
+    to refer (no access to genesis [0] block).
+  */
+
+  // create virtual operations for accounts created in genesis
+  const int32_t trx_in_block_prev{ _current_trx_in_block };
+  _current_trx_in_block = -1;
+  const auto& account_idx = get_index< chain::account_index >().indices().get< chain::by_id >();
+  std::for_each(
+      account_idx.begin()
+    , account_idx.end()
+    , [&]( const account_object& obj ){
+        push_virtual_operation(
+          account_created_operation(obj.name, obj.name, asset(0, VESTS_SYMBOL), asset(0, VESTS_SYMBOL) ) );
+      }
+  );
+  _current_trx_in_block = trx_in_block_prev;
+}
+
 void database::update_median_feed()
 {
 try {
@@ -4365,14 +4577,24 @@ try {
         if( has_hardfork( HIVE_HARDFORK_0_14__230 ) )
         {
           // This block limits the effective median price to force HBD to remain at or
-          // below 10% of the combined market cap of HIVE and HBD. The reason is to prevent
-          // individual with a lot of HBD to use sharp decline in HIVE price to make
-          // in-chain-but-out-of-market conversion to HIVE and take over the blockchain
+          // below HIVE_HBD_HARD_LIMIT of the combined market cap of HIVE and HBD.
+          // The reason is to prevent individual with a lot of HBD to use sharp decline
+          // in HIVE price to make in-chain-but-out-of-market conversion to HIVE and take
+          // over the blockchain
           //
-          // For example, if we have 500 HIVE and 100 HBD, the price is limited to
-          // 900 HBD / 500 HIVE which works out to be $1.80.  At this price, 500 HIVE
-          // would be valued at 500 * $1.80 = $900.  100 HBD is by definition always $100,
+          // For example (for 10% hard limit), if we have 500 HIVE and 100 HBD, the price is
+          // limited to 900 HBD / 500 HIVE which works out to be $1.80. At this price, 500 HIVE
+          // would be valued at 500 * $1.80 = $900. 100 HBD is by definition always $100,
           // so the combined market cap is $900 + $100 = $1000.
+          //
+          // Generalized formula:
+          // With minimal price we want existing amount of HBD (X) to be HIVE_HBD_HARD_LIMIT (L) of
+          // combined market cap (CMC), meaning the existing amount of HIVE (Y) has to be 100%-L of CMC.
+          // X + Y*price = CMC, X = L*CMC, Y*price = (100%-L)*CMC
+          // (100% - L)*CMC = (100% - L)*X/L = (100%/L - 1)*X therefore minimal price is
+          // (100%/L - 1)*X HBD per Y HIVE
+          // the above has one big problem - accuracy; f.e. with L = 30% the price will be the same
+          // as for L = 33%; for better accuracy we can express the price as (100%-L)*X HBD per L*Y HIVE
 
           const auto& dgpo = get_dynamic_global_properties();
           auto hbd_supply = dgpo.get_current_hbd_supply();
@@ -4380,13 +4602,38 @@ try {
             hbd_supply -= get_treasury().get_hbd_balance();
           if( hbd_supply.amount > 0 )
           {
-            price min_price( asset( 9 * hbd_supply.amount, HBD_SYMBOL ), dgpo.get_current_supply() );
+            uint16_t limit = HIVE_HBD_HARD_LIMIT_PRE_HF26;
+            if( has_hardfork( HIVE_HARDFORK_1_26_HBD_HARD_CAP ) )
+              limit = HIVE_HBD_HARD_LIMIT;
+            static_assert( ( HIVE_HBD_HARD_LIMIT % HIVE_1_PERCENT ) == 0, "Hard cap has to be expressed in full percentage points" );
+            limit /= HIVE_1_PERCENT; //ABW: this is just to have two more levels of magnitude bigger margin;
+              //even without it we can still fit within 64bit value, even though numbers used here are pretty big
+            price min_price( asset( ( HIVE_100_PERCENT/HIVE_1_PERCENT - limit ) * hbd_supply.amount, HBD_SYMBOL ),
+                             asset( limit * dgpo.get_current_supply().amount, HIVE_SYMBOL ) );
+
+            /*
+            ilog( "GREP${daily}: ${block}, ${minfeed}, ${medfeed}, ${maxfeed}, ${minprice}, ${medprice}, ${maxprice}, ${capprice}, ${debt}, ${hbdinfl}, ${hivesup}, ${virtsup}, ${hbdsup}",
+              ( "daily", ( ( head_block_num() % ( 24 * HIVE_FEED_INTERVAL_BLOCKS ) ) == 0 ) ? "24" : "" )( "block", head_block_num() )
+              ( "minfeed", double( feeds.front().base.amount.value ) / double( feeds.front().quote.amount.value ) )
+              ( "medfeed", double( median_feed.base.amount.value ) / double( median_feed.quote.amount.value ) )
+              ( "maxfeed", double( feeds.back().base.amount.value ) / double( feeds.back().quote.amount.value ) )
+              ( "minprice", double( fho.current_min_history.base.amount.value ) / double( fho.current_min_history.quote.amount.value ) )
+              ( "medprice", double( fho.current_median_history.base.amount.value ) / double( fho.current_median_history.quote.amount.value ) )
+              ( "maxprice", double( fho.current_max_history.base.amount.value ) / double( fho.current_max_history.quote.amount.value ) )
+              ( "capprice", double( min_price.base.amount.value ) / double( min_price.quote.amount.value ) )
+              ( "debt", double( calculate_HBD_percent() ) / 100.0 )
+              ( "hbdinfl", double( dgpo.get_hbd_interest_rate() ) / 100.0 )
+              ( "hivesup", dgpo.get_current_supply().amount.value )
+              ( "virtsup", dgpo.virtual_supply.amount.value )
+              ( "hbdsup", hbd_supply.amount.value )
+            );
+            */
 
             if( min_price > fho.current_median_history )
             {
               push_virtual_operation( system_warning_operation( FC_LOG_MESSAGE( warn,
-                "HIVE price corrected upward due to 10% HBD cutoff rule, from ${actual} to ${corrected}",
-                ( "actual", fho.current_median_history )( "corrected", min_price ) ).get_message() ) );
+                "HIVE price corrected upward due to ${limit}% HBD cutoff rule, from ${actual} to ${corrected}",
+                ( "limit", limit )( "actual", fho.current_median_history )( "corrected", min_price )).get_message()));
 
               fho.current_median_history = min_price;
             }
@@ -4400,29 +4647,85 @@ try {
   }
 } FC_CAPTURE_AND_RETHROW() }
 
-void database::apply_transaction(const signed_transaction& trx, uint32_t skip)
+void database::apply_transaction(const signed_transaction_transporter& trx, uint32_t skip)
 {
   detail::with_skip_flags( *this, skip, [&]() { _apply_transaction(trx); });
 }
 
-void database::_apply_transaction(const signed_transaction& trx)
+void database::_apply_transaction(const signed_transaction_transporter& trx)
 { try {
-  transaction_notification note(trx);
+  if( _current_tx_status == TX_STATUS_NONE )
+  {
+    wlog( "Missing tx processing indicator" );
+    // make sure to call set_tx_status() with proper status when your call can lead here
+  }
+
+  transaction_notification note(trx.trx);
   _current_trx_id = note.transaction_id;
   const transaction_id_type& trx_id = note.transaction_id;
-  _current_virtual_op = 0;
 
   uint32_t skip = get_node_properties().skip_flags;
 
-  if( !(skip&skip_validate) )   /* issue #505 explains why this skip_flag is disabled */
-    trx.validate();
+  if( !( skip & skip_transaction_dupe_check ) )
+  {
+    auto& trx_idx = get_index<transaction_index>();
+    FC_ASSERT( trx_idx.indices().get<by_trx_id>().find( trx_id ) == trx_idx.indices().get<by_trx_id>().end(),
+      "Duplicate transaction check failed", ( "trx_id", trx_id ) );
+  }
 
-  auto& trx_idx = get_index<transaction_index>();
-  const chain_id_type& chain_id = get_chain_id();
-  // idump((trx_id)(skip&skip_transaction_dupe_check));
-  FC_ASSERT( (skip & skip_transaction_dupe_check) ||
-          trx_idx.indices().get<by_trx_id>().find(trx_id) == trx_idx.indices().get<by_trx_id>().end(),
-          "Duplicate transaction check failed", ("trx_ix", trx_id) );
+  //Skip all manner of expiration and TaPoS checking if we're on block 1; It's impossible that the transaction is
+  //expired, and TaPoS makes no sense as no blocks exist.
+  if( BOOST_LIKELY( head_block_num() > 0 ) )
+  {
+    fc::time_point_sec now = head_block_time();
+
+    HIVE_ASSERT( trx.trx.expiration <= now + fc::seconds( HIVE_MAX_TIME_UNTIL_EXPIRATION ), transaction_expiration_exception,
+      "", ( "trx.expiration", trx.trx.expiration )( "now", now )( "max_til_exp", HIVE_MAX_TIME_UNTIL_EXPIRATION ) );
+    if( has_hardfork( HIVE_HARDFORK_0_9 ) ) // Simple solution to pending trx bug when now == trx.expiration
+      HIVE_ASSERT( now < trx.trx.expiration, transaction_expiration_exception, "", ( "now", now )( "trx.exp", trx.trx.expiration ) );
+    else
+      HIVE_ASSERT( now <= trx.trx.expiration, transaction_expiration_exception, "", ( "now", now )( "trx.exp", trx.trx.expiration ) );
+
+    if( !( skip & skip_tapos_check ) )
+    {
+      if( _benchmark_dumper.is_enabled() )
+        _benchmark_dumper.begin();
+
+      block_summary_object::id_type bsid( trx.trx.ref_block_num );
+      const auto& tapos_block_summary = get< block_summary_object >( bsid );
+      //Verify TaPoS block summary has correct ID prefix, and that this block's time is not past the expiration
+      HIVE_ASSERT( trx.trx.ref_block_prefix == tapos_block_summary.block_id._hash[ 1 ], transaction_tapos_exception,
+        "", ( "trx.ref_block_prefix", trx.trx.ref_block_prefix )
+        ( "tapos_block_summary", tapos_block_summary.block_id._hash[ 1 ] ) );
+
+      if( _benchmark_dumper.is_enabled() )
+        _benchmark_dumper.end( "transaction", "tapos check" );
+    }
+  }
+
+  if( !(skip&skip_validate) )   /* issue #505 explains why this skip_flag is disabled */
+  {
+    if( _benchmark_dumper.is_enabled() )
+    {
+      std::string name;
+      trx.trx.validate( [&]( const operation& op, bool post )
+      {
+        if( !post )
+        {
+          name = _my->_evaluator_registry.get_evaluator( op ).get_name( op );
+          _benchmark_dumper.begin();
+        }
+        else
+        {
+          _benchmark_dumper.end( "validate", name );
+        }
+      } );
+    }
+    else
+    {
+      trx.trx.validate();
+    }
+  }
 
   if( !(skip & (skip_transaction_signatures | skip_authority_check) ) )
   {
@@ -4432,10 +4735,19 @@ void database::_apply_transaction(const signed_transaction& trx)
 
     try
     {
-      trx.verify_authority( chain_id, get_active, get_owner, get_posting, HIVE_MAX_SIG_CHECK_DEPTH,
-        has_hardfork( HIVE_HARDFORK_0_20 ) || is_producing() ? HIVE_MAX_AUTHORITY_MEMBERSHIP : 0,
-        has_hardfork( HIVE_HARDFORK_0_20 ) || is_producing() ? HIVE_MAX_SIG_CHECK_ACCOUNTS : 0,
+      if( _benchmark_dumper.is_enabled() )
+        _benchmark_dumper.begin();
+
+      const chain_id_type& chain_id = get_chain_id();
+      trx.trx.verify_authority( chain_id, get_active, get_owner, get_posting,
+        trx.get_pack(),
+        HIVE_MAX_SIG_CHECK_DEPTH,
+        has_hardfork( HIVE_HARDFORK_0_20 ) ? HIVE_MAX_AUTHORITY_MEMBERSHIP : 0,
+        has_hardfork( HIVE_HARDFORK_0_20 ) ? HIVE_MAX_SIG_CHECK_ACCOUNTS : 0,
         has_hardfork( HIVE_HARDFORK_0_20__1944 ) ? fc::ecc::bip_0062 : fc::ecc::fc_canonical );
+
+      if( _benchmark_dumper.is_enabled() )
+        _benchmark_dumper.end( "transaction", "verify_authority", trx.trx.signatures.size() );
     }
     catch( protocol::tx_missing_active_auth& e )
     {
@@ -4444,44 +4756,27 @@ void database::_apply_transaction(const signed_transaction& trx)
     }
   }
 
-  //Skip all manner of expiration and TaPoS checking if we're on block 1; It's impossible that the transaction is
-  //expired, and TaPoS makes no sense as no blocks exist.
-  if( BOOST_LIKELY(head_block_num() > 0) )
-  {
-    if( !(skip & skip_tapos_check) )
-    {
-      block_summary_object::id_type bsid( trx.ref_block_num );
-      const auto& tapos_block_summary = get< block_summary_object >( bsid );
-      //Verify TaPoS block summary has correct ID prefix, and that this block's time is not past the expiration
-      HIVE_ASSERT( trx.ref_block_prefix == tapos_block_summary.block_id._hash[1], transaction_tapos_exception,
-              "", ("trx.ref_block_prefix", trx.ref_block_prefix)
-              ("tapos_block_summary",tapos_block_summary.block_id._hash[1]));
-    }
-
-    fc::time_point_sec now = head_block_time();
-
-    HIVE_ASSERT( trx.expiration <= now + fc::seconds(HIVE_MAX_TIME_UNTIL_EXPIRATION), transaction_expiration_exception,
-            "", ("trx.expiration",trx.expiration)("now",now)("max_til_exp",HIVE_MAX_TIME_UNTIL_EXPIRATION));
-    if( has_hardfork( HIVE_HARDFORK_0_9 ) ) // Simple solution to pending trx bug when now == trx.expiration
-      HIVE_ASSERT( now < trx.expiration, transaction_expiration_exception, "", ("now",now)("trx.exp",trx.expiration) );
-    HIVE_ASSERT( now <= trx.expiration, transaction_expiration_exception, "", ("now",now)("trx.exp",trx.expiration) );
-  }
-
   //Insert transaction into unique transactions database.
   if( !(skip & skip_transaction_dupe_check) )
   {
+    if( _benchmark_dumper.is_enabled() )
+      _benchmark_dumper.begin();
+
     create<transaction_object>([&](transaction_object& transaction) {
       transaction.trx_id = trx_id;
-      transaction.expiration = trx.expiration;
-      fc::raw::pack_to_buffer( transaction.packed_trx, trx );
+      transaction.expiration = trx.trx.expiration;
+      fc::raw::pack_to_buffer( transaction.packed_trx, trx.trx );
     });
+
+    if( _benchmark_dumper.is_enabled() )
+      _benchmark_dumper.end( "transaction", "dupe check" );
   }
 
   notify_pre_apply_transaction( note );
 
   //Finally process the operations
   _current_op_in_trx = 0;
-  for( const auto& op : trx.operations )
+  for( const auto& op : trx.trx.operations )
   { try {
     apply_operation(op);
     ++_current_op_in_trx;
@@ -4491,20 +4786,45 @@ void database::_apply_transaction(const signed_transaction& trx)
 
   notify_post_apply_transaction( note );
 
-} FC_CAPTURE_AND_RETHROW( (trx) ) }
+} FC_CAPTURE_AND_RETHROW( (trx.trx) ) }
+
+
+struct applied_operation_info_controller
+{
+  applied_operation_info_controller(const struct operation_notification** storage, const operation_notification& note) :
+    _storage(storage)
+    {
+    *_storage = &note;
+    }
+
+  ~applied_operation_info_controller()
+  {
+    *_storage = nullptr;
+  }
+
+private:
+  const struct operation_notification** _storage = nullptr;
+};
 
 void database::apply_operation(const operation& op)
 {
   operation_notification note = create_operation_notification( op );
+
+  applied_operation_info_controller ctrlr(&_current_applied_operation_info, note);
+
   notify_pre_apply_operation( note );
 
+  std::string name;
   if( _benchmark_dumper.is_enabled() )
+  {
+    name = _my->_evaluator_registry.get_evaluator( op ).get_name( op );
     _benchmark_dumper.begin();
+  }
 
   _my->_evaluator_registry.get_evaluator( op ).apply( op );
 
   if( _benchmark_dumper.is_enabled() )
-    _benchmark_dumper.end< true/*APPLY_CONTEXT*/ >( _my->_evaluator_registry.get_evaluator( op ).get_name( op ) );
+    _benchmark_dumper.end( name );
 
   notify_post_apply_operation( note );
 }
@@ -4641,11 +4961,8 @@ struct fcall<TResult(TArgs...)>
 
   fcall() = default;
   fcall(const TNotification& func, util::advanced_benchmark_dumper& dumper,
-      const abstract_plugin& plugin, const std::string& item_name)
-      : _func(func), _benchmark_dumper(dumper)
-    {
-      _name = plugin.get_name() + item_name;
-    }
+    const abstract_plugin& plugin, const std::string& context, const std::string& item_name)
+    : _func(func), _benchmark_dumper(dumper), _context(context), _name(item_name) {}
 
   void operator () (TArgs&&... args)
   {
@@ -4655,12 +4972,13 @@ struct fcall<TResult(TArgs...)>
     _func(std::forward<TArgs>(args)...);
 
     if (_benchmark_dumper.is_enabled())
-      _benchmark_dumper.end(_name);
+      _benchmark_dumper.end( _context, _name );
   }
 
 private:
   TNotification                    _func;
   util::advanced_benchmark_dumper& _benchmark_dumper;
+  std::string                      _context;
   std::string                      _name;
 };
 
@@ -4672,11 +4990,12 @@ struct fcall<std::function<TResult(TArgs...)>>
   using TBase::TBase;
 };
 
-template <typename TSignal, typename TNotification>
+template <bool IS_PRE_OPERATION, typename TSignal, typename TNotification>
 boost::signals2::connection database::connect_impl( TSignal& signal, const TNotification& func,
   const abstract_plugin& plugin, int32_t group, const std::string& item_name )
 {
-  fcall<TNotification> fcall_wrapper(func,_benchmark_dumper,plugin,item_name);
+  fcall<TNotification> fcall_wrapper( func, _benchmark_dumper, plugin,
+    util::advanced_benchmark_dumper::generate_context_desc<IS_PRE_OPERATION>( plugin.get_name() ), item_name );
 
   return signal.connect(group, fcall_wrapper);
 }
@@ -4685,14 +5004,15 @@ template< bool IS_PRE_OPERATION >
 boost::signals2::connection database::any_apply_operation_handler_impl( const apply_operation_handler_t& func,
   const abstract_plugin& plugin, int32_t group )
 {
-  auto complex_func = [this, func, &plugin]( const operation_notification& o )
+  std::string context = util::advanced_benchmark_dumper::generate_context_desc< IS_PRE_OPERATION >( plugin.get_name() );
+  auto complex_func = [this, func, &plugin, context]( const operation_notification& o )
   {
     std::string name;
 
     if (_benchmark_dumper.is_enabled())
     {
       if( _my->_evaluator_registry.is_evaluator( o.op ) )
-        name = _benchmark_dumper.generate_desc< IS_PRE_OPERATION >( plugin.get_name(), _my->_evaluator_registry.get_evaluator( o.op ).get_name( o.op ) );
+        name = _my->_evaluator_registry.get_evaluator( o.op ).get_name( o.op );
       else
         name = util::advanced_benchmark_dumper::get_virtual_operation_name();
 
@@ -4702,7 +5022,7 @@ boost::signals2::connection database::any_apply_operation_handler_impl( const ap
     func( o );
 
     if (_benchmark_dumper.is_enabled())
-      _benchmark_dumper.end( name );
+      _benchmark_dumper.end( context, name );
   };
 
   if( IS_PRE_OPERATION )
@@ -4714,25 +5034,25 @@ boost::signals2::connection database::any_apply_operation_handler_impl( const ap
 boost::signals2::connection database::add_pre_apply_required_action_handler( const apply_required_action_handler_t& func,
   const abstract_plugin& plugin, int32_t group )
 {
-  return connect_impl(_pre_apply_required_action_signal, func, plugin, group, "->required_action");
+  return connect_impl<true>(_pre_apply_required_action_signal, func, plugin, group, "required_action");
 }
 
 boost::signals2::connection database::add_post_apply_required_action_handler( const apply_required_action_handler_t& func,
   const abstract_plugin& plugin, int32_t group )
 {
-  return connect_impl(_post_apply_required_action_signal, func, plugin, group, "<-required_action");
+  return connect_impl<false>(_post_apply_required_action_signal, func, plugin, group, "required_action");
 }
 
 boost::signals2::connection database::add_pre_apply_optional_action_handler( const apply_optional_action_handler_t& func,
   const abstract_plugin& plugin, int32_t group )
 {
-  return connect_impl(_pre_apply_optional_action_signal, func, plugin, group, "->optional_action");
+  return connect_impl<true>(_pre_apply_optional_action_signal, func, plugin, group, "optional_action");
 }
 
 boost::signals2::connection database::add_post_apply_optional_action_handler( const apply_optional_action_handler_t& func,
   const abstract_plugin& plugin, int32_t group )
 {
-  return connect_impl(_post_apply_optional_action_signal, func, plugin, group, "<-optional_action");
+  return connect_impl<false>(_post_apply_optional_action_signal, func, plugin, group, "optional_action");
 }
 
 boost::signals2::connection database::add_pre_apply_operation_handler( const apply_operation_handler_t& func,
@@ -4750,75 +5070,98 @@ boost::signals2::connection database::add_post_apply_operation_handler( const ap
 boost::signals2::connection database::add_pre_apply_transaction_handler( const apply_transaction_handler_t& func,
   const abstract_plugin& plugin, int32_t group )
 {
-  return connect_impl(_pre_apply_transaction_signal, func, plugin, group, "->transaction");
+  return connect_impl<true>(_pre_apply_transaction_signal, func, plugin, group, "transaction");
 }
 
 boost::signals2::connection database::add_post_apply_transaction_handler( const apply_transaction_handler_t& func,
   const abstract_plugin& plugin, int32_t group )
 {
-  return connect_impl(_post_apply_transaction_signal, func, plugin, group, "<-transaction");
+  return connect_impl<false>(_post_apply_transaction_signal, func, plugin, group, "transaction");
+}
+
+boost::signals2::connection database::add_pre_apply_custom_operation_handler ( const apply_custom_operation_handler_t& func,
+  const abstract_plugin& plugin, int32_t group )
+{
+  return connect_impl< true/*IS_PRE_OPERATION*/ >(_pre_apply_custom_operation_signal, func, plugin, group, "custom");
+}
+
+boost::signals2::connection database::add_post_apply_custom_operation_handler( const apply_custom_operation_handler_t& func,
+  const abstract_plugin& plugin, int32_t group )
+{
+  return connect_impl< false/*IS_PRE_OPERATION*/ >(_post_apply_custom_operation_signal, func, plugin, group, "custom");
 }
 
 boost::signals2::connection database::add_pre_apply_block_handler( const apply_block_handler_t& func,
   const abstract_plugin& plugin, int32_t group )
 {
-  return connect_impl(_pre_apply_block_signal, func, plugin, group, "->block");
+  return connect_impl<true>(_pre_apply_block_signal, func, plugin, group, "block");
 }
 
 boost::signals2::connection database::add_post_apply_block_handler( const apply_block_handler_t& func,
   const abstract_plugin& plugin, int32_t group )
 {
-  return connect_impl(_post_apply_block_signal, func, plugin, group, "<-block");
+  return connect_impl<false>(_post_apply_block_signal, func, plugin, group, "block");
 }
 
 boost::signals2::connection database::add_fail_apply_block_handler( const apply_block_handler_t& func,
   const abstract_plugin& plugin, int32_t group )
 {
-  return connect_impl(_fail_apply_block_signal, func, plugin, group, "<-block");
+  return connect_impl<false>(_fail_apply_block_signal, func, plugin, group, "failed block");
 }
 
 boost::signals2::connection database::add_irreversible_block_handler( const irreversible_block_handler_t& func,
   const abstract_plugin& plugin, int32_t group )
 {
-  return connect_impl(_on_irreversible_block, func, plugin, group, "<-irreversible");
+  return connect_impl<false>(_on_irreversible_block, func, plugin, group, "irreversible");
+}
+
+boost::signals2::connection database::add_switch_fork_handler( const switch_fork_handler_t& func,
+                                                                      const abstract_plugin& plugin, int32_t group )
+{
+  return connect_impl<false>(_switch_fork_signal, func, plugin, group, "switch_fork");
 }
 
 boost::signals2::connection database::add_pre_reindex_handler(const reindex_handler_t& func,
   const abstract_plugin& plugin, int32_t group )
 {
-  return connect_impl(_pre_reindex_signal, func, plugin, group, "->reindex");
+  return connect_impl<true>(_pre_reindex_signal, func, plugin, group, "reindex");
 }
 
 boost::signals2::connection database::add_post_reindex_handler(const reindex_handler_t& func,
   const abstract_plugin& plugin, int32_t group )
 {
-  return connect_impl(_post_reindex_signal, func, plugin, group, "<-reindex");
+  return connect_impl<false>(_post_reindex_signal, func, plugin, group, "reindex");
 }
 
 boost::signals2::connection database::add_generate_optional_actions_handler(const generate_optional_actions_handler_t& func,
   const abstract_plugin& plugin, int32_t group )
 {
-  return connect_impl(_generate_optional_actions_signal, func, plugin, group, "->generate_optional_actions");
+  return connect_impl<true>(_generate_optional_actions_signal, func, plugin, group, "generate_optional_actions");
 }
 
 boost::signals2::connection database::add_prepare_snapshot_handler(const prepare_snapshot_handler_t& func, const abstract_plugin& plugin, int32_t group)
 {
-  return connect_impl(_prepare_snapshot_signal, func, plugin, group, "->prepare_snapshot");
+  return connect_impl<true>(_prepare_snapshot_signal, func, plugin, group, "prepare_snapshot");
 }
 
 boost::signals2::connection database::add_snapshot_supplement_handler(const prepare_snapshot_data_supplement_handler_t& func, const abstract_plugin& plugin, int32_t group)
 {
-  return connect_impl(_prepare_snapshot_supplement_signal, func, plugin, group, "->prepare_snapshot_data_supplement");
+  return connect_impl<true>(_prepare_snapshot_supplement_signal, func, plugin, group, "prepare_snapshot_data_supplement");
 }
 
 boost::signals2::connection database::add_snapshot_supplement_handler(const load_snapshot_data_supplement_handler_t& func, const abstract_plugin& plugin, int32_t group)
 {
-  return connect_impl(_load_snapshot_supplement_signal, func, plugin, group, "->load_snapshot_data_supplement");
+  return connect_impl<true>(_load_snapshot_supplement_signal, func, plugin, group, "load_snapshot_data_supplement");
 }
 
 boost::signals2::connection database::add_comment_reward_handler(const comment_reward_notification_handler_t& func, const abstract_plugin& plugin, int32_t group)
 {
-  return connect_impl(_comment_reward_signal, func, plugin, group, "->comment_reward");
+  return connect_impl<true>(_comment_reward_signal, func, plugin, group, "comment_reward");
+}
+
+boost::signals2::connection database::add_end_of_syncing_handler(const end_of_syncing_notification_handler_t& func, const abstract_plugin& plugin, int32_t group)
+{
+  return connect_impl<false>(_end_of_syncing_signal, func, plugin, group, "->syncing_end");
 }
 
 const witness_object& database::validate_block_header( uint32_t skip, const signed_block& next_block )const
@@ -4954,10 +5297,10 @@ void database::update_virtual_supply()
     {
       uint16_t percent_hbd = calculate_HBD_percent();
 
-      if( percent_hbd <= dgp.hbd_start_percent )
-        dgp.hbd_print_rate = HIVE_100_PERCENT;
-      else if( percent_hbd >= dgp.hbd_stop_percent )
+      if( percent_hbd >= dgp.hbd_stop_percent )
         dgp.hbd_print_rate = 0;
+      else if( percent_hbd <= dgp.hbd_start_percent )
+        dgp.hbd_print_rate = HIVE_100_PERCENT;
       else
         dgp.hbd_print_rate = ( ( dgp.hbd_stop_percent - percent_hbd ) * HIVE_100_PERCENT ) / ( dgp.hbd_stop_percent - dgp.hbd_start_percent );
     }
@@ -5074,6 +5417,7 @@ void database::migrate_irreversible_state(uint32_t old_last_irreversible)
     }
 
     // This deletes blocks from the fork db
+    //edump((dpo.head_block_number)(get_last_irreversible_block_num()));
     _fork_db.set_max_size( dpo.head_block_number - get_last_irreversible_block_num() + 1 );
 
     // This deletes undo state
@@ -5121,7 +5465,7 @@ int database::match( const limit_order_object& new_order, const limit_order_obje
 {
   bool has_hf_20__1815 = has_hardfork( HIVE_HARDFORK_0_20__1815 );
 
-#pragma message( "TODO:  Remove if(), do assert unconditionally after HF20 occurs" )
+FC_TODO( " Remove if(), do assert unconditionally after HF20 occurs" )
   if( has_hf_20__1815 )
   {
     HIVE_ASSERT( new_order.sell_price.quote.symbol == old_order.sell_price.base.symbol,
@@ -5164,7 +5508,7 @@ int database::match( const limit_order_object& new_order, const limit_order_obje
   old_order_pays = new_order_receives;
   new_order_pays = old_order_receives;
 
-#pragma message( "TODO:  Remove if(), do assert unconditionally after HF20 occurs" )
+FC_TODO( " Remove if(), do assert unconditionally after HF20 occurs" )
   if( has_hf_20__1815 )
   {
     HIVE_ASSERT( new_order_pays == new_order.amount_for_sale() ||
@@ -5196,7 +5540,7 @@ int database::match( const limit_order_object& new_order, const limit_order_obje
   result |= fill_order( new_order, new_order_pays, new_order_receives );
   result |= fill_order( old_order, old_order_pays, old_order_receives ) << 1;
 
-#pragma message( "TODO:  Remove if(), do assert unconditionally after HF20 occurs" )
+FC_TODO( " Remove if(), do assert unconditionally after HF20 occurs" )
   if( has_hf_20__1815 )
   {
     HIVE_ASSERT( result != 0,
@@ -5268,7 +5612,7 @@ bool database::fill_order( const limit_order_object& order, const asset& pays, c
     }
     else
     {
-#pragma message( "TODO:  Remove if(), do assert unconditionally after HF20 occurs" )
+FC_TODO( " Remove if(), do assert unconditionally after HF20 occurs" )
       if( has_hardfork( HIVE_HARDFORK_0_20__1815 ) )
       {
         HIVE_ASSERT( pays < order.amount_for_sale(),
@@ -5299,7 +5643,11 @@ bool database::fill_order( const limit_order_object& order, const asset& pays, c
 
 void database::cancel_order( const limit_order_object& order )
 {
-  adjust_balance( order.seller, order.amount_for_sale() );
+  auto amount_back = order.amount_for_sale();
+
+  adjust_balance( order.seller, amount_back );
+  push_virtual_operation(limit_order_cancelled_operation(order.seller, order.orderid, amount_back));
+
   remove(order);
 }
 
@@ -5333,13 +5681,14 @@ void database::clear_expired_delegations()
   auto itr = delegations_by_exp.begin();
   const auto& gpo = get_dynamic_global_properties();
 
-  while( itr != delegations_by_exp.end() && itr->expiration < now )
+  while( itr != delegations_by_exp.end() && itr->get_expiration_time() < now )
   {
-    operation vop = return_vesting_delegation_operation( itr->delegator, itr->vesting_shares );
+    auto& delegator = get_account( itr->get_delegator() );
+    operation vop = return_vesting_delegation_operation( delegator.get_name(), itr->get_vesting() );
     try{
     pre_push_virtual_operation( vop );
 
-    modify( get_account( itr->delegator ), [&]( account_object& a )
+    modify( delegator, [&]( account_object& a )
     {
       if( has_hardfork( HIVE_HARDFORK_0_20__2539 ) )
       {
@@ -5348,10 +5697,10 @@ void database::clear_expired_delegations()
           a,
           has_hardfork( HIVE_HARDFORK_0_21__3336 ),
           head_block_num() > HIVE_HF_21_STALL_BLOCK,
-          itr->vesting_shares.amount.value );
+          itr->get_vesting().amount.value );
       }
 
-      a.delegated_vesting_shares -= itr->vesting_shares;
+      a.delegated_vesting_shares -= itr->get_vesting();
     });
 
     post_push_virtual_operation( vop );
@@ -5391,18 +5740,36 @@ void database::adjust_smt_balance( const account_object& owner, const asset& del
 
 void database::modify_balance( const account_object& a, const asset& delta, bool check_balance )
 {
+  const bool trace_balance_change = false; //a.name == "X";
+  std::string op_context;
+
+  if(trace_balance_change)
+  {
+    if(_current_applied_operation_info != nullptr)
+      op_context = fc::json::to_string(_current_applied_operation_info->op);
+    else
+      op_context = "No operation context";
+  }
+
   modify( a, [&]( account_object& acnt )
   {
     switch( delta.symbol.asset_num )
     {
       case HIVE_ASSET_NUM_HIVE:
+      {
+        auto b = acnt.balance;
         acnt.balance += delta;
+        if(trace_balance_change)
+          ilog("${a} HIVE balance changed to ${nb} (previous: ${b} ) at block: ${block}. Operation context: ${c}", ("a", a.name)("b", b.amount)("nb", acnt.balance.amount)("block", _current_block_num)("c", op_context));
+
         if( check_balance )
         {
           FC_ASSERT( acnt.get_balance().amount.value >= 0, "Insufficient HIVE funds" );
         }
         break;
+      }
       case HIVE_ASSET_NUM_HBD:
+      {
         /// Starting from HF 25 HBD interest will be paid only from saving balance.
         if( has_hardfork(HIVE_HARDFORK_1_25) == false && a.hbd_seconds_last_update != head_block_time() )
         {
@@ -5429,12 +5796,19 @@ void database::modify_balance( const account_object& a, const asset& delta, bool
             } );
           }
         }
+
+        auto b = acnt.hbd_balance;
         acnt.hbd_balance += delta;
+
+        if(trace_balance_change)
+          ilog("${a} HBD balance changed to ${nb} (previous: ${b} ) at block: ${block}. Operation context: ${c}", ("a", a.name)("b", b.amount)("nb", acnt.hbd_balance.amount)("block", _current_block_num)("c", op_context));
+
         if( check_balance )
         {
           FC_ASSERT( acnt.get_hbd_balance().amount.value >= 0, "Insufficient HBD funds" );
         }
         break;
+      }
       case HIVE_ASSET_NUM_VESTS:
         acnt.vesting_shares += delta;
         if( check_balance )
@@ -5801,17 +6175,14 @@ void database::init_hardforks()
   FC_ASSERT( HIVE_HARDFORK_1_25 == 25, "Invalid hardfork configuration" );
   _hardfork_versions.times[ HIVE_HARDFORK_1_25 ] = fc::time_point_sec( HIVE_HARDFORK_1_25_TIME );
   _hardfork_versions.versions[ HIVE_HARDFORK_1_25 ] = HIVE_HARDFORK_1_25_VERSION;
-#if defined(IS_TEST_NET) && defined(HIVE_ENABLE_SMT)
   FC_ASSERT( HIVE_HARDFORK_1_26 == 26, "Invalid hardfork configuration" );
   _hardfork_versions.times[ HIVE_HARDFORK_1_26 ] = fc::time_point_sec( HIVE_HARDFORK_1_26_TIME );
   _hardfork_versions.versions[ HIVE_HARDFORK_1_26 ] = HIVE_HARDFORK_1_26_VERSION;
+#if defined(IS_TEST_NET) && defined(HIVE_ENABLE_SMT)
+  FC_ASSERT( HIVE_HARDFORK_1_27 == 27, "Invalid hardfork configuration" );
+  _hardfork_versions.times[ HIVE_HARDFORK_1_27 ] = fc::time_point_sec( HIVE_HARDFORK_1_27_TIME );
+  _hardfork_versions.versions[ HIVE_HARDFORK_1_27 ] = HIVE_HARDFORK_1_27_VERSION;
 #endif
-
-  const auto& hardforks = get_hardfork_property_object();
-  FC_ASSERT( hardforks.last_hardfork <= HIVE_NUM_HARDFORKS, "Chain knows of more hardforks than configuration", ("hardforks.last_hardfork",hardforks.last_hardfork)("HIVE_NUM_HARDFORKS",HIVE_NUM_HARDFORKS) );
-  FC_ASSERT( _hardfork_versions.versions[ hardforks.last_hardfork ] <= HIVE_BLOCKCHAIN_VERSION, "Blockchain version is older than last applied hardfork" );
-  FC_ASSERT( HIVE_BLOCKCHAIN_HARDFORK_VERSION >= HIVE_BLOCKCHAIN_VERSION );
-  FC_ASSERT( HIVE_BLOCKCHAIN_HARDFORK_VERSION == _hardfork_versions.versions[ HIVE_NUM_HARDFORKS ] );
 }
 
 void database::process_hardforks()
@@ -5885,6 +6256,7 @@ void database::apply_hardfork( uint32_t hardfork )
   operation hardfork_vop = hardfork_operation( hardfork );
 
   pre_push_virtual_operation( hardfork_vop );
+  const auto _op_in_trx = _current_op_in_trx;
 
   switch( hardfork )
   {
@@ -5904,7 +6276,6 @@ void database::apply_hardfork( uint32_t hardfork )
       break;
     case HIVE_HARDFORK_0_6:
       retally_witness_vote_counts();
-      retally_comment_children();
       break;
     case HIVE_HARDFORK_0_7:
       break;
@@ -5919,12 +6290,14 @@ void database::apply_hardfork( uint32_t hardfork )
           if( account == nullptr )
             continue;
 
-          update_owner_authority( *account, authority( 1, public_key_type( "STM7sw22HqsXbz7D2CmJfmMwt9rimtk518dRzsR1f8Cgw52dQR1pR" ), 1 ) );
+          wlog("Setting key: ${k} as an owner authority for account: ${a}", ("k", HIVE_HF_9_COMPROMISED_ACCOUNTS_PUBLIC_KEY_STR)("a", acc));
+
+          update_owner_authority( *account, authority( 1, public_key_type(HIVE_HF_9_COMPROMISED_ACCOUNTS_PUBLIC_KEY_STR), 1 ) );
 
           modify( get< account_authority_object, by_account >( account->name ), [&]( account_authority_object& auth )
           {
-            auth.active  = authority( 1, public_key_type( "STM7sw22HqsXbz7D2CmJfmMwt9rimtk518dRzsR1f8Cgw52dQR1pR" ), 1 );
-            auth.posting = authority( 1, public_key_type( "STM7sw22HqsXbz7D2CmJfmMwt9rimtk518dRzsR1f8Cgw52dQR1pR" ), 1 );
+            auth.active  = authority( 1, public_key_type(HIVE_HF_9_COMPROMISED_ACCOUNTS_PUBLIC_KEY_STR), 1 );
+            auth.posting = authority( 1, public_key_type(HIVE_HF_9_COMPROMISED_ACCOUNTS_PUBLIC_KEY_STR), 1 );
           });
         }
       }
@@ -5944,22 +6317,23 @@ void database::apply_hardfork( uint32_t hardfork )
           // All posts with a payout get their cashout time set to +30 days. This hardfork takes place within 30 days
           // initial payout so we don't have to handle the case of posts that should be frozen that aren't
           const comment_object& comment = get_comment( *itr );
+          const comment_cashout_ex_object* c_ex = find_comment_cashout_ex( comment );
           if( comment.is_root() )
           {
-            // Post has not been paid out and has no votes (cashout_time == 0 === net_rshares == 0, under current semmantics)
-            if( itr->last_payout == fc::time_point_sec::min() && itr->cashout_time == fc::time_point_sec::maximum() )
+            // Post has not been paid out and has no votes (cashout_time == 0 === net_rshares == 0, under current semantics)
+            if( !c_ex->was_paid() && itr->get_cashout_time() == fc::time_point_sec::maximum() )
             {
               modify( *itr, [&]( comment_cashout_object & c )
               {
-                c.cashout_time = head_block_time() + HIVE_CASHOUT_WINDOW_SECONDS_PRE_HF17;
+                c.set_cashout_time( head_block_time() + HIVE_CASHOUT_WINDOW_SECONDS_PRE_HF17 );
               });
             }
             // Has been paid out, needs to be on second cashout window
-            else if( itr->last_payout > fc::time_point_sec() )
+            else if( c_ex->was_paid() )
             {
               modify( *itr, [&]( comment_cashout_object& c )
               {
-                c.cashout_time = c.last_payout + HIVE_SECOND_CASHOUT_WINDOW;
+                c.set_cashout_time( c_ex->get_last_payout() + HIVE_SECOND_CASHOUT_WINDOW );
               });
             }
           }
@@ -6046,20 +6420,20 @@ void database::apply_hardfork( uint32_t hardfork )
         * their cashout time in a similar way, grabbing the root post as their inherent cashout time.
         */
         const auto& comment_idx = get_index< comment_cashout_index, by_cashout_time >();
-        const auto& by_root_idx = get_index< comment_index, by_root >();
+        const auto& by_root_idx = get_index< comment_cashout_ex_index, by_root >();
         vector< const comment_cashout_object* > root_posts;
         root_posts.reserve( HIVE_HF_17_NUM_POSTS );
         vector< const comment_cashout_object* > replies;
         replies.reserve( HIVE_HF_17_NUM_REPLIES );
 
-        for( auto itr = comment_idx.begin(); itr != comment_idx.end() && itr->cashout_time < fc::time_point_sec::maximum(); ++itr )
+        for( auto itr = comment_idx.begin(); itr != comment_idx.end() && itr->get_cashout_time() < fc::time_point_sec::maximum(); ++itr )
         {
           root_posts.push_back( &(*itr) );
-          auto cid = itr->get_comment_id();
+          auto root_id = itr->get_comment_id();
 
-          for( auto reply_itr = by_root_idx.lower_bound( cid ); reply_itr != by_root_idx.end() && reply_itr->get_root_id() == cid; ++reply_itr )
+          for( auto reply_itr = by_root_idx.lower_bound( root_id ); reply_itr != by_root_idx.end() && reply_itr->get_root_id() == root_id; ++reply_itr )
           {
-            const comment_cashout_object* comment_cashout = find_comment_cashout( *reply_itr );
+            const comment_cashout_object* comment_cashout = find_comment_cashout( reply_itr->get_comment_id() );
             replies.push_back( comment_cashout );
           }
         }
@@ -6068,7 +6442,7 @@ void database::apply_hardfork( uint32_t hardfork )
         {
           modify( *itr, [&]( comment_cashout_object& c )
           {
-            c.cashout_time = std::max( c.get_creation_time() + HIVE_CASHOUT_WINDOW_SECONDS, c.cashout_time );
+            c.set_cashout_time( std::max( c.get_creation_time() + HIVE_CASHOUT_WINDOW_SECONDS, c.get_cashout_time() ) );
           });
         }
 
@@ -6076,7 +6450,7 @@ void database::apply_hardfork( uint32_t hardfork )
         {
           modify( *itr, [&]( comment_cashout_object& c )
           {
-            c.cashout_time = std::max( calculate_discussion_payout_time( c ), itr->get_creation_time() + HIVE_CASHOUT_WINDOW_SECONDS );
+            c.set_cashout_time( std::max( calculate_discussion_payout_time( get_comment( c ), c ), c.get_creation_time() + HIVE_CASHOUT_WINDOW_SECONDS ) );
           });
         }
       }
@@ -6106,7 +6480,7 @@ void database::apply_hardfork( uint32_t hardfork )
 
         while( delegation_itr != delegation_idx.end() )
         {
-          if( delegation_itr->vesting_shares.amount == 0 )
+          if( delegation_itr->get_vesting().amount == 0 )
             to_remove.push_back( &(*delegation_itr) );
 
           ++delegation_itr;
@@ -6117,7 +6491,7 @@ void database::apply_hardfork( uint32_t hardfork )
           remove( *delegation_ptr );
         }
 
-        remove_old_comments();
+        remove_old_cashouts();
       }
       break;
     case HIVE_HARDFORK_0_20:
@@ -6195,7 +6569,7 @@ void database::apply_hardfork( uint32_t hardfork )
     case HIVE_HARDFORK_1_24:
     {
       restore_accounts( hardforkprotect::get_restored_accounts() );
-#ifdef IS_TEST_NET
+#ifdef USE_ALTERNATE_CHAIN_ID
       /// Don't change chain_id in testnet build.
 #else
       set_chain_id(HIVE_CHAIN_ID);
@@ -6211,10 +6585,19 @@ void database::apply_hardfork( uint32_t hardfork )
       });
       modify( get_dynamic_global_properties(), [&]( dynamic_global_property_object& gpo )
       {
-        gpo.reverse_auction_seconds = 0;
+        gpo.reverse_auction_seconds = HIVE_REVERSE_AUCTION_WINDOW_SECONDS_HF25;
         gpo.early_voting_seconds    = HIVE_EARLY_VOTING_SECONDS_HF25;
         gpo.mid_voting_seconds      = HIVE_MID_VOTING_SECONDS_HF25;
       });
+      break;
+    }
+    case HIVE_HARDFORK_1_26:
+    {
+      modify( get_dynamic_global_properties(), [&]( dynamic_global_property_object& gpo )
+      {
+        gpo.hbd_stop_percent = HIVE_HBD_STOP_PERCENT_HF26;
+        gpo.hbd_start_percent = HIVE_HBD_START_PERCENT_HF26;
+      } );
       break;
     }
     case HIVE_SMT_HARDFORK:
@@ -6243,7 +6626,7 @@ void database::apply_hardfork( uint32_t hardfork )
     FC_ASSERT( hfp.processed_hardforks[ hfp.last_hardfork ] == _hardfork_versions.times[ hfp.last_hardfork ], "Hardfork processing failed sanity check..." );
   } );
 
-  if( hardfork == HIVE_TREASURY_RENAME_HARDFORK )
+  if( hardfork == HIVE_HARDFORK_1_24_TREASURY_RENAME )
   {
     lock_account( get_treasury() );
     //the following routine can only be called effectively after hardfork was marked as applied
@@ -6252,7 +6635,7 @@ void database::apply_hardfork( uint32_t hardfork )
     consolidate_treasury_balance();
   }
 
-  post_push_virtual_operation( hardfork_vop );
+  post_push_virtual_operation( hardfork_vop, _op_in_trx );
 }
 
 void database::retally_liquidity_weight() {
@@ -6278,7 +6661,7 @@ void database::validate_invariants()const
     asset pending_vesting_hive = asset( 0, HIVE_SYMBOL );
     share_type total_vsf_votes = share_type( 0 );
     ushare_type total_delayed_votes = ushare_type( 0 );
-    
+
     uint64_t witness_no = 0;
     uint64_t account_no = 0;
     uint64_t convert_no = 0;
@@ -6511,7 +6894,7 @@ void database::validate_smt_invariants()const
     }
 
     // - Reward funds
-#pragma message( "TODO: Add reward_fund_object iteration here once they support SMTs." )
+FC_TODO( "Add reward_fund_object iteration here once they support SMTs." )
 
     // - Escrow & savings - no support of SMT is expected.
 
@@ -6529,7 +6912,7 @@ void database::validate_smt_invariants()const
       total_liquid_supply += asset( smt.total_vesting_fund_smt, smt.liquid_symbol )
                     /*+ gpo.get_total_reward_fund_hive() */
                     + asset( smt.pending_rewarded_vesting_smt, smt.liquid_symbol );
-#pragma message( "TODO: Supplement ^ once SMT rewards are implemented" )
+FC_TODO( "Supplement ^ once SMT rewards are implemented" )
       FC_ASSERT( asset(smt.current_supply, smt.liquid_symbol) == total_liquid_supply,
               "", ("smt current_supply",smt.current_supply)("total_liquid_supply",total_liquid_supply) );
       // Check vesting SMT supply.
@@ -6585,50 +6968,25 @@ void database::perform_vesting_share_split( uint32_t magnitude )
     {
       modify( comment, [&]( comment_cashout_object& c )
       {
-        c.net_rshares       *= magnitude;
-        c.abs_rshares       *= magnitude;
-        c.vote_rshares      *= magnitude;
+        //c.net_rshares *= magnitude;
+        //c.vote_rshares *= magnitude;
+        c.accumulate_vote_rshares( c.get_net_rshares() * ( magnitude - 1 ), c.get_vote_rshares() * ( magnitude - 1 ) );
+      } );
+      modify( *find_comment_cashout_ex( comment.get_comment_id() ), [&]( comment_cashout_ex_object& c_ex )
+      {
+        //c_ex.abs_rshares *= magnitude;
+        c_ex.accumulate_abs_rshares( c_ex.get_abs_rshares() * ( magnitude - 1 ) );
       } );
     }
 
     for( const auto& c : comments )
     {
-      if( c.net_rshares.value > 0 )
-        adjust_rshares2( 0, util::evaluate_reward_curve( c.net_rshares.value ) );
+      if( c.get_net_rshares() > 0 )
+        adjust_rshares2( 0, util::evaluate_reward_curve( c.get_net_rshares() ) );
     }
 
   }
   FC_CAPTURE_AND_RETHROW()
-}
-
-void database::retally_comment_children()
-{
-  const auto& cidx = get_index< comment_cashout_index >().indices();
-  const auto& cidx2 = get_index< comment_index >().indices();
-
-  // Clear children counts
-  for( auto itr = cidx.begin(); itr != cidx.end(); ++itr )
-  {
-    modify( *itr, [&]( comment_cashout_object& c )
-    {
-      c.children = 0;
-    });
-  }
-
-  for( auto itr = cidx2.begin(); itr != cidx2.end(); ++itr )
-  {
-    if( !itr->is_root() )
-    {
-      const comment_cashout_object* comment_cashout = find_comment_cashout( itr->get_parent_id() );
-      if( comment_cashout )
-      {
-        modify( *comment_cashout, [&]( comment_cashout_object& c )
-        {
-          c.children++;
-        });
-      }
-    }
-  }
 }
 
 void database::retally_witness_votes()
@@ -6737,6 +7095,165 @@ void database::remove_expired_governance_votes()
       break;
     }
   }
+}
+
+//safe to call without chainbase lock
+std::vector<block_id_type> database::get_blockchain_synopsis(const block_id_type& reference_point, uint32_t number_of_blocks_after_reference_point)
+{
+  fc::optional<uint32_t> block_number_needed_from_block_log;
+  std::vector<block_id_type> synopsis = _fork_db.get_blockchain_synopsis(reference_point, number_of_blocks_after_reference_point, block_number_needed_from_block_log);
+
+  if (block_number_needed_from_block_log)
+  {
+    uint32_t reference_point_block_num = protocol::block_header::num_from_id(reference_point);
+    optional<signed_block> block = _block_log.read_block_by_num(*block_number_needed_from_block_log);
+    assert(block);
+    if (reference_point_block_num == *block_number_needed_from_block_log)
+    {
+      // we're getting this block from the database because it's the reference point,
+      // not because it's the last irreversible.
+      // We can only do this if the reference point really is in the blockchain
+      if (block->id() == reference_point)
+        synopsis.insert(synopsis.begin(), reference_point);
+      else
+      {
+        wlog("Unable to generate a usable synopsis because the peer we're generating it for forked too long ago "
+             "(our chains diverge before block #${reference_point_block_num}",
+             (reference_point_block_num));
+        // TODO: get the right type of exception here
+        //FC_THROW_EXCEPTION(graphene::net::block_older_than_undo_history, "Peer is on a fork I'm unable to switch to");
+        FC_THROW("Peer is on a fork I'm unable to switch to");
+      }
+    }
+    else
+      synopsis.insert(synopsis.begin(), block->id());
+  }
+  return synopsis;
+}
+
+std::deque<block_id_type>::const_iterator database::find_first_item_not_in_blockchain(const std::deque<block_id_type>& item_hashes_received)
+{
+  return _fork_db.with_read_lock([&](){
+    return std::partition_point(item_hashes_received.begin(), item_hashes_received.end(), [&](const block_id_type& block_id) { 
+      return is_known_block_unlocked(block_id);
+    });
+  });
+}
+
+// requires forkdb read lock, does not require chainbase lock
+bool database::is_included_block_unlocked(const block_id_type& block_id)
+{ try {
+  uint32_t block_num = block_header::num_from_id(block_id);
+  if (block_num == 0)
+    return block_id == block_id_type();
+
+  // See if fork DB has the item
+  shared_ptr<fork_item> fitem = _fork_db.fetch_block_on_main_branch_by_number_unlocked(block_num);
+  if (fitem)
+    return block_id == fitem->id;
+
+
+  // Next we check if block_log has it. Irreversible blocks are here.
+  optional<signed_block_header> block_header = _block_log.read_block_header_by_num(block_num);
+  return block_header && block_id == block_header->id();
+} FC_CAPTURE_AND_RETHROW() }
+
+// used by the p2p layer, get_block_ids takes a blockchain synopsis provided by a peer, and generates 
+// a sequential list of block ids that builds off of the last item in the synopsis that we have in
+// common
+// no chainbase lock required
+std::vector<block_id_type> database::get_block_ids(const std::vector<block_id_type>& blockchain_synopsis, uint32_t& remaining_item_count, uint32_t limit)
+{
+  uint32_t first_block_num_in_reply;
+  uint32_t last_block_num_in_reply;
+  uint32_t last_block_from_block_log_in_reply;
+  shared_ptr<fork_item> head;
+  uint32_t head_block_num;
+  vector<block_id_type> result;
+
+  // get and hold a fork database lock so a fork switch can't happen while we're in the middle of creating
+  // this list of block ids
+  _fork_db.with_read_lock([&]() {
+    remaining_item_count = 0;
+    head = _fork_db.head_unlocked();
+    if (!head)
+      return;
+    head_block_num = head->num;
+
+    block_id_type last_known_block_id;
+    if (blockchain_synopsis.empty() || 
+        (blockchain_synopsis.size() == 1 && blockchain_synopsis[0] == block_id_type()))
+    {
+      // peer has sent us an empty synopsis meaning they have no blocks.
+      // A bug in old versions would cause them to send a synopsis containing block 000000000
+      // when they had an empty blockchain, so pretend they sent the right thing here.
+      // do nothing, leave last_known_block_id set to zero
+    }
+    else
+    {
+      bool found_a_block_in_synopsis = false;
+      for (const block_id_type& block_id_in_synopsis : boost::adaptors::reverse(blockchain_synopsis))
+        if (block_id_in_synopsis == block_id_type() || is_included_block_unlocked(block_id_in_synopsis))
+        {
+          last_known_block_id = block_id_in_synopsis;
+          found_a_block_in_synopsis = true;
+          break;
+        }
+
+      if (!found_a_block_in_synopsis)
+        FC_THROW_EXCEPTION(internal_peer_is_on_an_unreachable_fork, "Unable to provide a list of blocks starting at any of the blocks in peer's synopsis");
+    }
+
+    // the list will be composed of block ids from the block_log first, followed by ones from the fork database.
+    // when building our reply, we'll fill in the ones from the fork_database first, so we can release the 
+    // fork_db lock, then we'll grab the ids from the block_log at our leisure.
+    first_block_num_in_reply = block_header::num_from_id(last_known_block_id);
+    if (first_block_num_in_reply == 0)
+      ++first_block_num_in_reply;
+    last_block_num_in_reply = std::min(head_block_num, first_block_num_in_reply + limit - 1);
+    uint32_t result_size = last_block_num_in_reply - first_block_num_in_reply + 1;
+
+    result.resize(result_size);
+
+    uint32_t oldest_block_num_in_forkdb = _fork_db.get_oldest_block_num_unlocked();
+    last_block_from_block_log_in_reply = std::min(oldest_block_num_in_forkdb - 1, last_block_num_in_reply);
+
+    uint32_t first_block_num_from_fork_db_in_reply = std::max(oldest_block_num_in_forkdb, first_block_num_in_reply);
+    //idump((first_block_num_in_reply)(last_block_from_block_log_in_reply)(first_block_num_from_fork_db_in_reply)(last_block_num_in_reply));
+
+    for (uint32_t block_num = first_block_num_from_fork_db_in_reply; 
+         block_num <= last_block_num_in_reply;
+         ++block_num)
+    {
+      shared_ptr<fork_item> item_from_forkdb = _fork_db.fetch_block_on_main_branch_by_number_unlocked(block_num);
+      assert(item_from_forkdb);
+      uint32_t index_in_result = block_num - first_block_num_in_reply;
+      result[index_in_result] = item_from_forkdb->id;
+    }
+  }); // drop the forkdb lock   
+
+  if (!head)
+  {
+    remaining_item_count = 0;
+    return result;
+  }
+
+  for (uint32_t block_num = first_block_num_in_reply;
+       block_num <= last_block_from_block_log_in_reply;
+       ++block_num)
+  {
+    optional<signed_block_header> block_header = _block_log.read_block_header_by_num(block_num);
+    assert(block_header);
+    uint32_t index_in_result = block_num - first_block_num_in_reply;
+    result[index_in_result] = block_header->id();
+  }
+
+  if (!result.empty() && block_header::num_from_id(result.back()) < head_block_num) 
+    remaining_item_count = head_block_num - last_block_num_in_reply;
+  else
+    remaining_item_count = 0;
+
+  return result;
 }
 
 } } //hive::chain
